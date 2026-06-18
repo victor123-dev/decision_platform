@@ -2142,7 +2142,7 @@ body {
     var(--surface-2)
   );
   border-radius: var(--seed-radius-md);
-  overflow: hidden;
+  overflow: visible;
   transition: all 0.2s ease;
   position: relative;
 }
@@ -2211,6 +2211,20 @@ body {
 @keyframes agent-cursor-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* ── Step Circle Pulse (structured chain current step) ── */
+@keyframes step-circle-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 40%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 0%, transparent); }
+}
+.step-circle-active {
+  animation: step-circle-pulse 1.6s ease-in-out infinite;
+}
+
+/* ── Step text smooth transition ── */
+.step-text-streaming {
+  animation: agent-fade-slide-in 0.25s ease-out;
 }
 
 /* ── Loading / Thinking Dots ── */
@@ -2395,12 +2409,10 @@ body {
 
 /* ── Proposal Panel ── */
 .proposal-panel {
-  width: 420px;
   border-left: 1px solid var(--border);
   background: linear-gradient(to bottom, var(--surface-2), var(--surface));
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
   overflow: hidden;
 }
 
@@ -2466,6 +2478,10 @@ body {
   background: var(--surface-2);
   border: 1px solid color-mix(in srgb, var(--primary) 0%, var(--border));
   transition: all 0.15s ease;
+}
+
+.proposal-var-row > * {
+  min-width: 0;
 }
 
 .proposal-var-row:hover {
@@ -2823,4 +2839,256 @@ body {
 
 .proposal-select:hover {
   border-color: color-mix(in srgb, var(--primary) 20%, var(--border));
-}  
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   新增：Agent 辅助建模改造样式
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ---- GuidedFeasibilityWizard ---- */
+.guided-wizard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--seed-radius-md);
+  padding: 16px;
+}
+
+.guided-wizard-header h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 6px;
+}
+
+.guided-wizard-header p {
+  font-size: 13px;
+  color: var(--fg-3);
+  margin: 0;
+}
+
+.guided-wizard-progress {
+  margin: 14px 0;
+}
+
+.guided-wizard-progress-bar {
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.guided-wizard-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 70%, var(--accent)));
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.guided-wizard-step-info {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 6px;
+  text-align: right;
+}
+
+.guided-wizard-step {
+  margin: 14px 0;
+}
+
+.guided-wizard-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+
+.guided-wizard-step-question {
+  font-size: 13px;
+  color: var(--fg-2);
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+
+.guided-wizard-input {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  border-radius: var(--seed-radius-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+  resize: vertical;
+  outline: none;
+  font-family: inherit;
+}
+
+.guided-wizard-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.guided-wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* ---- VariableToken / OntologyBadge ---- */
+.variable-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  cursor: default;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.variable-token-clickable {
+  cursor: pointer;
+}
+
+.variable-token-clickable:hover {
+  background: var(--surface-3);
+  border-color: var(--primary);
+}
+
+.ontology-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-3);
+  cursor: default;
+}
+
+.ontology-badge-clickable {
+  cursor: pointer;
+}
+
+.ontology-badge-icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* ---- 本体对象类型标色 ---- */
+.ontology-color-supplier { background: #eff6ff; color: #2563eb; border-color: #bfdbfe; }
+.ontology-color-warehouse { background: #ecfeff; color: #0891b2; border-color: #a5f3fc; }
+.ontology-color-order { background: #fff7ed; color: #ea580c; border-color: #fed7aa; }
+.ontology-color-product { background: #ecfdf5; color: #059669; border-color: #a7f3d0; }
+.ontology-color-customer { background: #fdf2f8; color: #db2777; border-color: #fbcfe8; }
+.ontology-color-material { background: #eef2ff; color: #4f46e5; border-color: #c7d2fe; }
+.ontology-color-work-order { background: #f0fdfa; color: #0d9488; border-color: #99f6e4; }
+.ontology-color-risk { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+.ontology-color-inventory { background: #f7fee7; color: #65a30d; border-color: #d9f99d; }
+.ontology-color-machine { background: #f0f9ff; color: #0284c7; border-color: #bae6fd; }
+.ontology-color-task { background: #faf5ff; color: #9333ea; border-color: #e9d5ff; }
+.ontology-color-logistics { background: #f0fdfa; color: #0f766e; border-color: #99f6e4; }
+.ontology-color-default { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+
+/* ---- 右侧面板变量 token 紧凑样式 ---- */
+.proposal-var-token {
+  font-size: 12px;
+  padding: 1px 8px;
+}
+
+.variable-token-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+/* ---- VariableToken Hover Tooltip ---- */
+.variable-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  min-width: 220px;
+  max-width: 320px;
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 12px 24px rgba(0,0,0,0.35);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+
+.variable-tooltip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #334155;
+}
+
+.variable-tooltip-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.badge-direct {
+  background: #065f46;
+  color: #6ee7b7;
+}
+
+.badge-assoc {
+  background: #581c87;
+  color: #d8b4fe;
+}
+
+.variable-tooltip-dim {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.variable-tooltip-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.variable-tooltip-table td {
+  padding: 2px 0;
+  vertical-align: top;
+}
+
+.vt-label {
+  color: #94a3b8;
+  width: 56px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.vt-value {
+  color: #e2e8f0;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.vt-mono {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  color: #7dd3fc;
+}
+
+.vt-path {
+  font-size: 10px;
+  color: #86efac;
+}

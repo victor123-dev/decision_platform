@@ -1,10 +1,14 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import ReactDOM from 'react-dom';
-import { Send, Loader2, MessageSquare, Brain, CheckCircle, AlertCircle, RefreshCw, FileText, Copy, Download, Undo2, RotateCcw, X, Clock, ArrowUp, Bot, User, Zap } from 'lucide-react';
+import { Send, Loader2, MessageSquare, Brain, CheckCircle, CheckCircle2, AlertCircle, RefreshCw, FileText, Copy, Download, Undo2, RotateCcw, X, Clock, ArrowUp, Bot, User, Zap } from 'lucide-react';
 import { api } from '../api/apiClient';
-import { saveConversation, createNewSession, updateConversationTitle, exportSession, importSession, generateSessionTitle } from '../utils/sessionStorage';
+import { saveConversation, createNewSession, updateConversationTitle, exportSession, importSession, generateSessionTitle, appendToSession } from '../utils/sessionStorage';
 import { showToast } from './Toast';
 import SessionList from './SessionList';
+import OntologyModelMappingModal from './OntologyModelMappingModal';
+import GuidedFeasibilityWizard from './GuidedFeasibilityWizard';
+import VariableToken, { VariableTokenGroup } from './VariableToken';
+import { buildVariableMap, normalizeCoefficient, getOntologyPath } from '../utils/variableUtils';
 
 // ─ Ontology Data for Variable Source Matching ────────────────────────────
 let _ontologyCache = null;
@@ -64,6 +68,29 @@ function matchVariableToOntology(varName, lookup) {
   return null;
 }
 
+// Multi-color mapping for ontology object types
+const ONTOLOGY_COLORS = {
+  '供应商': '#3b82f6',   // blue
+  '客户': '#10b981',     // green
+  '物料': '#f59e0b',     // amber
+  '工单': '#8b5cf6',     // purple
+  '产品': '#ec4899',     // pink
+  '风险': '#ef4444',     // red
+  '库存': '#06b6d4',     // cyan
+  '机台': '#f97316',     // orange
+  '生产任务': '#6366f1', // indigo
+  '物流单': '#14b8a6',   // teal
+  'default': '#64748b',  // slate
+};
+
+function getOntologyColor(ontoPath) {
+  if (!ontoPath) return ONTOLOGY_COLORS.default;
+  for (const [objType, color] of Object.entries(ONTOLOGY_COLORS)) {
+    if (ontoPath.includes(objType)) return color;
+  }
+  return ONTOLOGY_COLORS.default;
+}
+
 const AGENT_STAGES = {
   INITIAL: 'initial',
   CLARIFYING: 'clarifying',
@@ -75,30 +102,51 @@ const AGENT_STAGES = {
 
 
 const SYSTEM_PROMPT = `
-你是一位专业的优化建模专家助手。请遵循以下工作流程帮助用户构建数学优化模型：
+你是一位专业的优化建模专家助手。请遵循以下结构化工作流程帮助用户构建数学优化模型：
 
 ## 角色：
 - 你是精通线性规划、整数规划、混合整数规划的专家
 - 擅长将业务问题转化为数学模型
 - 能够理解复杂的业务需求并提出专业建议
+- 精通供应链控制塔本体模型（供应商/客户/物料/工单/产品/风险/库存/机台/生产任务/物流单）
 
-## 工作流程：
-1. **需求澄清**：通过提问了解用户的优化问题
-   - 优化目标（最大化/最小化什么）
-   - 决策变量（需要决定的变量）
-   - 约束条件（资源限制、业务规则等）
-   - 问题类型（LP/MIP/QP等）
+## 思考推理规范（极其重要）：
+- **简洁明了**：思考过程必须简洁，避免冗长的技术分析
+- **用户视角**：只输出对用户有意义的思考内容，禁止输出内部处理细节、API调用过程、JSON结构分析等技术性内容
+- **多轮对话**：当用户进行多轮对话（修改、追问、补充）时，思考过程应该更加简短，只需简要确认理解并给出方案，不需要重复完整的分析流程
+- **禁止输出原始数据**：思考过程中禁止输出JSON格式数据、变量定义列表、约束条件列表等结构化数据
+- **聚焦结论**：直接给出结论和建议，而不是展示推理的中间步骤
 
-2. **模型设计**：根据用户描述设计数学模型
-   - 定义决策变量及其类型
-   - 建立目标函数
-   - 确定约束条件
+## 结构化工作流程（必须严格按步骤执行）：
 
-3. **方案展示**：向用户展示模型方案并寻求反馈
+### Step 1: 识别业务对象
+- 分析用户描述，识别涉及的本体对象类型（如：机台、工单、物料等）
+- 列出每个对象的关键属性
 
-4. **迭代优化**：根据用户反馈修改模型
+### Step 2: 匹配决策变量集
+- 根据识别的对象，推荐对应的决策变量（参考变量集模板）
+- 为每个变量关联本体引用：ontologyRef = { objectType, property }
+- 说明每个变量的业务含义
 
-5. **确认应用**：最终确认并输出结构化模型数据
+### Step 3: 匹配约束条件集
+- 根据识别的对象和变量，推荐常态化约束模板
+- 约束分类：硬约束(hard)/软约束(soft)
+- 为软约束建议惩罚权重
+
+### Step 4: 补充完善
+- 根据用户特定需求补充额外的变量或约束
+- 确认目标函数方向与系数
+
+### Step 5: 生成模型草案
+- 输出完整的模型JSON（见下方格式要求）
+- 包含ontologyRef本体引用信息
+
+### Step 6: 用户确认
+- 等待用户审核、调整方案面板中的参数
+- 根据用户修改重新生成
+
+### Step 7: 输出最终OR-DSL
+- 确认后输出结构化OR-DSL JSON，用于回填编辑器
 
 ## 输出格式要求：
 
@@ -115,10 +163,24 @@ const SYSTEM_PROMPT = `
     ]
   },
   "variables": [
-    {"name": "产品A产量", "type": "continuous", "lowerBound": 0, "upperBound": null}
+    {
+      "name": "产品A产量",
+      "type": "continuous",
+      "lowerBound": 0,
+      "upperBound": null,
+      "ontologyRef": {"objectType": "生产任务", "property": "计划数量"},
+      "businessMeaning": "产品A在各产线的生产数量"
+    }
   ],
   "constraints": [
-    {"name": "产能约束", "description": "总产量不超过产能上限", "sense": "<=", "rhs": 100}
+    {
+      "name": "产能约束",
+      "description": "总产量不超过产能上限",
+      "sense": "<=",
+      "rhs": 100,
+      "category": "capacity",
+      "hardness": "hard"
+    }
   ]
 }
 </MODEL_JSON>
@@ -129,6 +191,7 @@ const SYSTEM_PROMPT = `
 - 每次提问只问一个问题，逐步澄清
 - 如果用户描述不完整，主动追问缺失的信息
 - 提供专业建议帮助用户完善模型
+- **思维链中涉及本体术语时，请在术语后加括号标注归属路径，如：机台（供应链控制塔.机台.设备编号）**
 
 ## 变量命名规范：
 - 决策变量必须使用业务语义命名，如"产品产量"、"库存水平"、"运输量"
@@ -158,6 +221,14 @@ function buildOntologyHighlightMap(lookup) {
   return map;
 }
 
+function getOntologyPathColor(path) {
+  if (!path) return ONTOLOGY_COLORS.default;
+  for (const [objType, color] of Object.entries(ONTOLOGY_COLORS)) {
+    if (path.includes(objType)) return color;
+  }
+  return ONTOLOGY_COLORS.default;
+}
+
 function highlightOntologyTerms(text, highlightMap) {
   if (!text || highlightMap.size === 0) return text;
   const sorted = [...highlightMap.entries()].sort((a, b) => b[0].length - a[0].length);
@@ -165,7 +236,7 @@ function highlightOntologyTerms(text, highlightMap) {
   const placeholders = [];
   for (const [term, { path, isSynonym }] of sorted) {
     if (!result.includes(term)) continue;
-    const color = isSynonym ? '#f59e0b' : '#3b82f6';
+    const color = getOntologyPathColor(path);
     const placeholder = `\x00PH${placeholders.length}\x00`;
     placeholders.push(
       `<span class="onto-tag" style="background:${color}15;color:${color}" title="${path}">`
@@ -178,7 +249,84 @@ function highlightOntologyTerms(text, highlightMap) {
   return result;
 }
 
-// Clean reasoning content: remove MODEL_JSON blocks
+// React 组件：将文本中的本体术语渲染为带颜色标签 + hover tooltip
+function OntologyHighlightedText({ text, lookup, onHover }) {
+  if (!text || !lookup || lookup.size === 0) return <span>{text}</span>;
+
+  const segments = useMemo(() => {
+    const highlightMap = buildOntologyHighlightMap(lookup);
+    const sorted = [...highlightMap.entries()].sort((a, b) => b[0].length - a[0].length);
+
+    // 构建带占位符的分段
+    let segments = [{ text, highlighted: false }];
+    sorted.forEach(([term, { path, isSynonym }]) => {
+      const color = getOntologyPathColor(path);
+      const nextSegments = [];
+      segments.forEach(seg => {
+        if (seg.highlighted) {
+          nextSegments.push(seg);
+          return;
+        }
+        let idx = seg.text.indexOf(term);
+        let rest = seg.text;
+        while (idx !== -1) {
+          if (idx > 0) nextSegments.push({ text: rest.slice(0, idx), highlighted: false });
+          nextSegments.push({
+            text: term,
+            highlighted: true,
+            path,
+            color,
+            isSynonym,
+          });
+          rest = rest.slice(idx + term.length);
+          idx = rest.indexOf(term);
+        }
+        if (rest) nextSegments.push({ text: rest, highlighted: false });
+      });
+      segments = nextSegments;
+    });
+    return segments;
+  }, [text, lookup]);
+
+  return (
+    <span>
+      {segments.map((seg, i) => {
+        if (!seg.highlighted) return <span key={i}>{seg.text}</span>;
+        return (
+          <span
+            key={i}
+            className="onto-tag-inline"
+            style={{
+              background: `${seg.color}15`,
+              color: seg.color,
+              borderRadius: 4,
+              padding: '0 4px',
+              cursor: 'help',
+            }}
+            onMouseEnter={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              if (onHover) onHover({ text: seg.path, top: rect.top, left: rect.left + rect.width / 2 });
+            }}
+            onMouseLeave={() => onHover && onHover(null)}
+          >
+            <span className="onto-dot" style={{ background: seg.color }} />
+            {seg.text}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+// Strip MODEL_JSON blocks and incomplete tags from display content
+function stripModelJson(text) {
+  let s = text.replace(/<MODEL_JSON>[\s\S]*?<\/MODEL_JSON>/g, '');
+  const openIdx = s.indexOf('<MODEL_JSON');
+  if (openIdx !== -1) s = s.slice(0, openIdx);
+  return s.trim();
+}
+
+// Clean reasoning content: remove technical/internal content for user-friendly display
 function cleanReasoningContent(text) {
   if (!text) return '';
   // Remove <MODEL_JSON>...</MODEL_JSON> blocks
@@ -186,6 +334,24 @@ function cleanReasoningContent(text) {
   // Remove any stray JSON-like code fences
   cleaned = cleaned.replace(/```json[\s\S]*?```/g, '');
   cleaned = cleaned.replace(/```[\s\S]*?```/g, '');
+  // Remove JSON fragments (lines starting with { } [ ] or containing "key":)
+  cleaned = cleaned.split('\n').filter(line => {
+    const t = line.trim();
+    if (!t) return true;
+    // Remove pure JSON lines
+    if (/^[{}[\]],?\s*$/.test(t)) return false;
+    if (/^"[^"]+"\s*:\s*/.test(t)) return false;
+    if (/^\s*"[^"]+"\s*,?\s*$/.test(t) && t.length > 5) return false;
+    // Remove tool call / function call patterns
+    if (/^(Calling|Invoking|Executing|Using)\s+(tool|function|API)/i.test(t)) return false;
+    // Remove internal step markers like "Step 1:", "步骤1:" when followed by technical content
+    if (/^(Step\s*\d+|步骤\s*\d+)\s*[:：]\s*(识别|匹配|生成|验证|构建)/i.test(t) && t.length < 40) return false;
+    return true;
+  }).join('\n');
+  // Truncate overly long reasoning to max 1500 chars
+  if (cleaned.length > 1500) {
+    cleaned = cleaned.slice(0, 1500) + '\n…';
+  }
   return cleaned.trim();
 }
 
@@ -287,11 +453,191 @@ function ThinkingChainPanel({ thinking, highlightMap, isStreaming = false }) {
         ref={contentRef}
         className="thinking-content"
         onScroll={handleScroll}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
+        dangerouslySetInnerHTML={{ __html: isStreaming ? highlighted + '<span class="streaming-cursor"></span>' : highlighted }}
       />
     </details>
   );
 }
+
+// ── Structured Thinking Chain Panel ─────────────────────────────────────
+const STRUCTURED_STEPS = [
+  { id: 1, title: '识别业务语义' },
+  { id: 2, title: '确认系数' },
+  { id: 3, title: '确认决策变量' },
+  { id: 4, title: '确认目标函数' },
+  { id: 5, title: '确认约束条件' },
+  { id: 6, title: '确认取值范围' },
+  { id: 7, title: '完善模型' },
+  { id: 8, title: '生成建模草案' },
+  { id: 9, title: '生成OR-DSL' },
+];
+
+// 单个步骤项 —— memo 确保仅当该步骤数据变化时才重新渲染，避免其他步骤更新时的级联重绘
+const StepItem = memo(function StepItem({ stepId, title, step, currentStep, isStreaming, lookup }) {
+  const status = step?.status || (stepId < currentStep ? 'success' : 'pending');
+  const isCurrent = stepId === currentStep;
+  const isDone = status === 'success';
+  const isWarning = status === 'warning';
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 2, position: 'relative', zIndex: 1 }}>
+        <div style={{
+          width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: isDone ? 'var(--success)' : isWarning ? 'var(--warning)' : isCurrent ? 'var(--primary)' : 'var(--surface-3)',
+          color: isDone || isWarning || isCurrent ? '#fff' : 'var(--fg-3)',
+          fontSize: 10, fontWeight: 700, zIndex: 1,
+          border: `2px solid ${isDone ? 'var(--success)' : isWarning ? 'var(--warning)' : isCurrent ? 'var(--primary)' : 'var(--border)'}`,
+        }} className={isCurrent && isStreaming ? 'step-circle-active' : ''}>
+          {isDone ? <CheckCircle2 size={12} /> : isWarning ? '!' : stepId}
+        </div>
+        {stepId < 9 && (
+          <div style={{
+            position: 'absolute',
+            left: '50%', transform: 'translateX(-50%)',
+            top: 22, bottom: -8,
+            width: 2,
+            background: stepId < currentStep ? 'var(--success)' : 'var(--border)',
+          }} />
+        )}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: 12, fontWeight: isCurrent ? 600 : 500,
+          color: isCurrent ? 'var(--primary)' : 'var(--fg)',
+        }}>
+          {title}
+        </div>
+        {step?.text && (
+          <div className={step.status === 'running' ? 'step-text-streaming' : ''} style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2, lineHeight: 1.5 }}>
+            <OntologyHighlightedText text={step.text} lookup={lookup} onHover={() => {}} />
+            {step.status === 'running' && isStreaming && <span className="streaming-cursor" />}
+          </div>
+        )}
+        {step?.payload?.missingElements && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {step.payload.missingElements.map((e, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                background: 'var(--warning-bg, #fff7ed)', color: 'var(--warning)',
+                border: '1px solid var(--warning)',
+              }}>{e}</span>
+            ))}
+          </div>
+        )}
+        {step?.payload?.matchedVariables && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {step.payload.matchedVariables.slice(0, 6).map((v, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                background: 'var(--surface-2)', color: 'var(--fg-2)',
+                border: '1px solid var(--border)',
+              }}>{v.name || v.symbol}</span>
+            ))}
+          </div>
+        )}
+        {step?.payload?.matchedConstraints && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {step.payload.matchedConstraints.slice(0, 6).map((c, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                background: 'var(--surface-2)', color: 'var(--fg-2)',
+                border: '1px solid var(--border)',
+              }}>{c.name}</span>
+            ))}
+          </div>
+        )}
+        {step?.payload?.variables && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {step.payload.variables.slice(0, 6).map((v, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                background: 'var(--surface-2)', color: 'var(--fg-2)',
+                border: '1px solid var(--border)',
+              }}>{v.name || v.symbol}</span>
+            ))}
+          </div>
+        )}
+        {step?.payload?.constraints && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {step.payload.constraints.slice(0, 6).map((c, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                background: 'var(--surface-2)', color: 'var(--fg-2)',
+                border: '1px solid var(--border)',
+              }}>{c.name}</span>
+            ))}
+          </div>
+        )}
+        {step?.payload?.coefficients && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {step.payload.coefficients.slice(0, 6).map((c, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                background: 'var(--surface-2)', color: 'var(--fg-2)',
+                border: '1px solid var(--border)',
+              }}>{c.name}{c.value !== null && c.value !== undefined ? `=${c.value}` : ''}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const StructuredThinkingChain = memo(function StructuredThinkingChain({ steps, currentStep, isStreaming, lookup }) {
+  if (!steps || steps.length === 0) return null;
+
+  const feasibilityStep = steps.find(s => s.step === 0);
+  // 预构建 stepId → step 数据映射，避免在渲染时重复 find
+  const stepMap = useMemo(() => {
+    const m = new Map();
+    steps.forEach(s => m.set(s.step, s));
+    return m;
+  }, [steps]);
+
+  return (
+    <div className="agent-thinking-panel" style={{ marginBottom: 14, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <Brain size={13} style={{ color: 'var(--primary)', opacity: 0.7 }} />
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)' }}>Agent 建模步骤</span>
+        {isStreaming && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3,
+            fontSize: 11, color: 'var(--primary)', fontWeight: 400,
+          }}>
+            <span className="agent-thinking-dots-mini"><span /><span /><span /></span>
+            执行中…
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 4 }}>
+        {feasibilityStep && (
+          <StepItem
+            stepId={0}
+            title="建模可行性评估"
+            step={feasibilityStep}
+            currentStep={currentStep}
+            isStreaming={isStreaming}
+            lookup={lookup}
+          />
+        )}
+        {STRUCTURED_STEPS.map(stepDef => (
+          <StepItem
+            key={stepDef.id}
+            stepId={stepDef.id}
+            title={stepDef.title}
+            step={stepMap.get(stepDef.id)}
+            currentStep={currentStep}
+            isStreaming={isStreaming}
+            lookup={lookup}
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
 
 function formatTimestamp(isoString) {
   if (!isoString) return '';
@@ -338,6 +684,74 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
   const [hoveredTooltip, setHoveredTooltip] = useState(null);
   const [modifiedFields, setModifiedFields] = useState(new Set());
   const [ontologyLookup, setOntologyLookup] = useState(new Map());
+  const [highlightVariableId, setHighlightVariableId] = useState(null);
+  const [showMappingModal, setShowMappingModal] = useState(false);
+
+  // 结构化建模步骤状态
+  const [structuredSteps, setStructuredSteps] = useState([]);
+  const [structuredCurrentStep, setStructuredCurrentStep] = useState(0);
+  const [structuredStreaming, setStructuredStreaming] = useState(false);
+  const [useStructuredMode, setUseStructuredMode] = useState(true);
+  const [assessmentContext, setAssessmentContext] = useState({ history: [] });
+  const [pendingClarification, setPendingClarification] = useState(null);
+
+  // 结构化步骤批量更新（ref + requestAnimationFrame，减少 SSE 事件导致的重渲染）
+  const structuredStepsRef = useRef([]);
+  const stepsBufferRef = useRef(null);
+  const stepsRafRef = useRef(null);
+
+  useEffect(() => {
+    structuredStepsRef.current = structuredSteps;
+  }, [structuredSteps]);
+
+  const flushStructuredSteps = useCallback(() => {
+    stepsRafRef.current = null;
+    if (stepsBufferRef.current !== null) {
+      structuredStepsRef.current = stepsBufferRef.current;
+      setStructuredSteps(stepsBufferRef.current);
+      stepsBufferRef.current = null;
+    }
+  }, []);
+
+  const setStructuredStepsBatched = useCallback((updater) => {
+    const base = stepsBufferRef.current !== null ? stepsBufferRef.current : structuredStepsRef.current;
+    const next = typeof updater === 'function' ? updater(base) : updater;
+    stepsBufferRef.current = next;
+    if (stepsRafRef.current === null) {
+      stepsRafRef.current = requestAnimationFrame(flushStructuredSteps);
+    }
+  }, [flushStructuredSteps]);
+
+  const resetStructuredSteps = useCallback(() => {
+    if (stepsRafRef.current !== null) {
+      cancelAnimationFrame(stepsRafRef.current);
+      stepsRafRef.current = null;
+    }
+    structuredStepsRef.current = [];
+    stepsBufferRef.current = null;
+    setStructuredSteps([]);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (stepsRafRef.current !== null) {
+        cancelAnimationFrame(stepsRafRef.current);
+        stepsRafRef.current = null;
+      }
+    };
+  }, []);
+
+  // 用于支持“新建会话后台任务继续”的 AbortController
+  const activeControllerRef = useRef(null);
+  const backgroundTaskRef = useRef(null);
+  // 流式 token 节流的 rAF 引用（避免每个 token 都触发 setMessages 重建数组）
+  const streamRafRef = useRef(null);
+  const currentSessionRef = useRef(currentSession);
+
+  useEffect(() => {
+    currentSessionRef.current = currentSession;
+  }, [currentSession]);
+
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -464,8 +878,9 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
     return diffs.length > 0 ? diffs : null;
   }, [editableProposal, selectedProposalIndex, proposalHistory, currentProposal]);
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || loading) return;
+  const handleSend = async (overrideMessage) => {
+    const messageText = (overrideMessage || inputValue).trim();
+    if (!messageText || loading) return;
 
     let session = currentSession;
     if (!session) {
@@ -476,22 +891,198 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
     const userMessage = {
       id: Date.now(),
       type: 'user',
-      content: inputValue.trim(),
+      content: messageText,
       timestamp: new Date().toISOString(),
     };
     appendMessage(userMessage);
-    setInputValue('');
+    if (!overrideMessage) setInputValue('');
     setLoading(true);
     setApiError(null);
 
     if (session && !session.title && messages.length <= 1) {
-      const newTitle = generateSessionTitle(inputValue.trim());
+      const newTitle = generateSessionTitle(messageText);
       updateConversationTitle(session.id, newTitle);
       setCurrentSession(prev => prev ? { ...prev, title: newTitle } : prev);
     }
 
     let agentMsgId = null;
     try {
+      // 结构化建模模式：可行性评估 → 9步建模流程
+      if (useStructuredMode && stage !== AGENT_STAGES.PROPOSING && stage !== AGENT_STAGES.REFINING) {
+        // 判断是新的建模请求还是补充信息
+        const isClarification = pendingClarification !== null;
+        const currentContext = isClarification ? assessmentContext : { history: [] };
+
+        agentMsgId = Date.now() + 1;
+        appendMessage({
+          id: agentMsgId,
+          type: 'agent',
+          content: isClarification
+            ? '收到补充信息，正在重新评估建模可行性...'
+            : '正在按本体建模流程为您构建模型方案...',
+          reasoning_content: '',
+          stage: AGENT_STAGES.PROPOSING,
+          timestamp: new Date().toISOString(),
+          streaming: false,
+          structuredMode: true,
+        });
+
+        resetStructuredSteps();
+        setStructuredCurrentStep(0);
+        setStructuredStreaming(true);
+
+        let finalDraft = null;
+        let clarification = null;
+        let feasibilityComplete = false;
+        const requestSessionId = currentSessionRef.current?.id;
+
+        activeControllerRef.current = new AbortController();
+        const controller = activeControllerRef.current;
+
+        await api.qwen.chatStructuredStream(
+          messageText,
+          (event, payload) => {
+            // 如果用户已切换会话，当前任务是后台任务，只保存结果到原会话，不更新当前 UI
+            const isBackgroundTask = currentSessionRef.current?.id !== requestSessionId;
+
+            if (event === 'feasibility_start') {
+              // 可行性评估开始
+            } else if (event === 'feasibility_assessing') {
+              if (isBackgroundTask) return;
+              setStructuredStepsBatched(prev => [
+                ...prev,
+                { step: 0, text: payload.text, status: 'running', payload: {} },
+              ]);
+            } else if (event === 'feasibility_result') {
+              feasibilityComplete = payload.complete;
+              if (!payload.complete) {
+                if (isBackgroundTask) return;
+                setStructuredStepsBatched(prev => {
+                  const next = prev.filter(s => s.step !== 0);
+                  return [...next, {
+                    step: 0,
+                    text: `建模要素不完整，缺少：${(payload.missing_elements || []).join('、') || '—'}`,
+                    status: 'warning',
+                    payload: { missingElements: payload.missing_elements, elements: payload.elements },
+                  }];
+                });
+              } else {
+                if (isBackgroundTask) return;
+                setStructuredStepsBatched(prev => {
+                  const next = prev.filter(s => s.step !== 0);
+                  return [...next, { step: 0, text: '建模可行性评估通过，开始执行建模步骤。', status: 'success', payload: {} }];
+                });
+              }
+            } else if (event === 'clarification_needed') {
+              clarification = {
+                questions: payload.questions || [],
+                missingElements: payload.missing_elements || [],
+                suggestion: payload.suggestion || '',
+                issues: payload.issues || [],
+              };
+            } else if (event === 'step_start') {
+              if (isBackgroundTask) return;
+              setStructuredCurrentStep(payload.step);
+            } else if (event === 'step_content') {
+              if (isBackgroundTask) return;
+              setStructuredStepsBatched(prev => {
+                const next = prev.filter(s => s.step !== payload.step);
+                return [...next, { step: payload.step, text: payload.text, status: 'running', payload: payload.payload || {} }];
+              });
+            } else if (event === 'step_end') {
+              if (isBackgroundTask) return;
+              setStructuredStepsBatched(prev => {
+                const next = prev.filter(s => s.step !== payload.step);
+                const existing = prev.find(s => s.step === payload.step);
+                return [...next, { ...(existing || { step: payload.step, text: '' }), status: payload.status }];
+              });
+            } else if (event === 'model_draft') {
+              finalDraft = payload.draft;
+
+              // 后台任务完成时，将结果追加到原会话
+              if (isBackgroundTask && requestSessionId && payload.draft) {
+                const summary = payload.summary || payload.draft?.summary || '模型草案已生成';
+                appendToSession(requestSessionId, [
+                  {
+                    id: Date.now(),
+                    type: 'agent',
+                    content: `${summary}（后台任务完成）`,
+                    proposal: payload.draft,
+                    stage: AGENT_STAGES.PROPOSING,
+                    timestamp: new Date().toISOString(),
+                  },
+                ]);
+                backgroundTaskRef.current = null;
+              }
+            }
+          },
+          false,
+          currentContext,
+          controller
+        );
+
+        setStructuredStreaming(false);
+        activeControllerRef.current = null;
+
+        // 更新评估上下文历史
+        const newHistoryEntry = { role: 'user', content: messageText };
+        const assistantEntry = clarification
+          ? { role: 'assistant', content: `需要补充信息：${(clarification.questions || []).join('；')}` }
+          : finalDraft
+            ? { role: 'assistant', content: '建模可行性评估通过，已生成模型草案。' }
+            : { role: 'assistant', content: '建模流程执行完毕。' };
+
+        setAssessmentContext(prev => ({
+          history: [...(prev?.history || []), newHistoryEntry, assistantEntry].slice(-10),
+        }));
+
+        if (clarification) {
+          // 需要用户补充信息，使用分步引导向导
+          setPendingClarification(clarification);
+          setStage(AGENT_STAGES.CLARIFYING);
+          setMessages(prev => prev.map(m =>
+            m.id === agentMsgId ? {
+              ...m,
+              content: '建模要素尚不完整，请按向导补充信息。',
+              stage: AGENT_STAGES.CLARIFYING,
+              structuredMode: true,
+              wizard: true,
+              clarification: clarification,
+            } : m
+          ));
+          setLoading(false);
+          return;
+        }
+
+        // 清除待补充状态
+        setPendingClarification(null);
+
+        if (finalDraft) {
+          setCurrentProposal(finalDraft);
+          addProposalToHistory(finalDraft);
+          setStage(AGENT_STAGES.PROPOSING);
+          const summary = finalDraft.summary || `已生成${finalDraft.problemType || 'LP'}模型，共 ${finalDraft.variables?.length || 0} 个变量、${finalDraft.constraints?.length || 0} 个约束。`;
+          setMessages(prev => prev.map(m =>
+            m.id === agentMsgId ? {
+              ...m,
+              content: `${summary}\n\n识别到业务对象：${(finalDraft._entities?.objects || []).join('、') || '—'}。请在右侧面板确认或调整。`,
+              proposal: finalDraft,
+              stage: AGENT_STAGES.PROPOSING,
+            } : m
+          ));
+        } else {
+          setMessages(prev => prev.filter(m => m.id !== agentMsgId));
+          // 结构化失败，降级到普通对话模式
+          setUseStructuredMode(false);
+          // 继续执行下方的普通对话逻辑
+        }
+
+        if (finalDraft) {
+          setLoading(false);
+          return;
+        }
+      }
+
       const userContext = { ...context };
       if (userModified && editableProposal) {
         const diffs = computeProposalDiff();
@@ -504,32 +1095,62 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
       const chatMessages = [
         { type: 'system', content: SYSTEM_PROMPT },
         ...messages.map(m => ({ type: m.type, content: m.content })),
-        { type: 'user', content: inputValue.trim() + (userContext.userModifications ? `\n\n[用户已手动调整模型，修改点：${userContext.userModifications.join('；')}]` : '') },
+        { type: 'user', content: messageText + (userContext.userModifications ? `\n\n[用户已手动调整模型，修改点：${userContext.userModifications.join('；')}]` : '') },
       ];
 
-      agentMsgId = Date.now() + 1;
-      appendMessage({
-        id: agentMsgId,
-        type: 'agent',
-        content: '',
-        reasoning_content: '',
-        stage: stage,
-        timestamp: new Date().toISOString(),
-        streaming: true,
-      });
+      if (!agentMsgId) {
+        agentMsgId = Date.now() + 1;
+        appendMessage({
+          id: agentMsgId,
+          type: 'agent',
+          content: '',
+          reasoning_content: '',
+          stage: stage,
+          timestamp: new Date().toISOString(),
+          streaming: true,
+        });
+      }
 
       let fullContent = '';
       let fullReasoning = '';
+      let streamDirty = false;
+      // Helper: strip MODEL_JSON and incomplete tags from display content
+      const stripMJ = stripModelJson;
+
+      // rAF 节流：每个动画帧最多触发一次 setMessages，避免每个 token 都重建整个消息数组
+      const flushStreamFrame = () => {
+        streamRafRef.current = null;
+        if (!streamDirty) return;
+        streamDirty = false;
+        const displayContent = stripMJ(fullContent);
+        setMessages(prev => prev.map(m =>
+          m.id === agentMsgId ? { ...m, content: displayContent || '正在构建模型…', reasoning_content: fullReasoning } : m
+        ));
+      };
+
       await api.qwen.chatStream(chatMessages, (field, text) => {
         if (field === 'reasoning_content') {
           fullReasoning += text;
         } else {
           fullContent += text;
         }
-        setMessages(prev => prev.map(m =>
-          m.id === agentMsgId ? { ...m, content: fullContent, reasoning_content: fullReasoning } : m
-        ));
+        streamDirty = true;
+        if (streamRafRef.current === null) {
+          streamRafRef.current = requestAnimationFrame(flushStreamFrame);
+        }
       });
+
+      // 流结束后确保最后一帧已刷新
+      if (streamRafRef.current !== null) {
+        cancelAnimationFrame(streamRafRef.current);
+        streamRafRef.current = null;
+      }
+      {
+        const displayContent = stripMJ(fullContent);
+        setMessages(prev => prev.map(m =>
+          m.id === agentMsgId ? { ...m, content: displayContent || '正在构建模型…', reasoning_content: fullReasoning } : m
+        ));
+      }
 
       const parsedModel = parseModelFromResponse(fullContent);
       setMessages(prev => prev.map(m =>
@@ -690,7 +1311,7 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
     };
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     const proposal = editableProposal || proposalHistory[selectedProposalIndex] || currentProposal;
     if (!proposal) return;
 
@@ -702,6 +1323,80 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
     });
 
     setStage(AGENT_STAGES.CONFIRMING);
+
+    // Step 9: 流式生成 OR-DSL
+    setStructuredCurrentStep(9);
+    setStructuredStreaming(true);
+    setStructuredStepsBatched(prev => [
+      ...prev.filter(s => s.step !== 9),
+      { step: 9, text: '正在将确认的模型草案转换为 OR-DSL...', status: 'running' },
+    ]);
+
+    let orDsl = null;
+    let dslError = null;
+
+    try {
+      // 构建符合后端期望的 draft 结构
+      const draft = {
+        name: proposal.name || 'AI生成模型',
+        description: proposal.description || '',
+        problemType: proposal.problemType || 'LP',
+        variables: (proposal.variables || []).map(v => ({
+          id: v.id || `v-${Date.now()}-${Math.random()}`,
+          name: v.name,
+          nameEn: v.nameEn || '',
+          nature: v.nature || 'custom',
+          type: v.type || 'continuous',
+          lowerBound: v.lowerBound ?? 0,
+          upperBound: v.upperBound ?? null,
+          ontologyRef: v.ontologyRef,
+          ontologyPath: v.ontologyPath || getOntologyPath(v),
+          dimension: v.dimension || '',
+          domain: v.domain || v.type || 'continuous',
+          businessMeaning: v.businessMeaning || '',
+          unit: v.unit || '',
+        })),
+        objective: proposal.objective || { sense: 'minimize', coefficients: [] },
+        constraints: (proposal.constraints || []).map((c, idx) => ({
+          id: c.id || `c-${Date.now()}-${idx}`,
+          name: c.name,
+          description: c.description || '',
+          sense: c.sense || '<=',
+          rhs: c.rhs ?? 0,
+          coefficients: c.coefficients || {},
+        })),
+      };
+
+      await api.qwen.confirmGenerateDslStream(draft, userModified, (event, payload) => {
+        if (event === 'step_start') {
+          setStructuredCurrentStep(payload.step);
+        } else if (event === 'step_content') {
+          setStructuredStepsBatched(prev => {
+            const next = prev.filter(s => s.step !== payload.step);
+            return [...next, { step: payload.step, text: payload.text, status: 'running', payload: payload.payload || {} }];
+          });
+        } else if (event === 'step_end') {
+          setStructuredStepsBatched(prev => {
+            const next = prev.filter(s => s.step !== payload.step);
+            const existing = prev.find(s => s.step === payload.step);
+            return [...next, { ...(existing || { step: payload.step, text: '' }), status: payload.status }];
+          });
+        } else if (event === 'or_dsl') {
+          orDsl = payload.orDsl || null;
+        } else if (event === 'error') {
+          dslError = payload.message || 'OR-DSL 生成失败';
+        }
+      });
+    } catch (err) {
+      console.error('OR-DSL 生成失败:', err);
+      dslError = err.message || 'OR-DSL 生成失败';
+    } finally {
+      setStructuredStreaming(false);
+    }
+
+    if (dslError) {
+      showToast(`OR-DSL 生成失败：${dslError}，但仍会回填基础模型`, 'warning', 4000);
+    }
 
     setTimeout(() => {
       appendMessage({
@@ -721,10 +1416,18 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
             variables: proposal.variables.map(v => ({
               id: v.id || `v-${Date.now()}-${Math.random()}`,
               name: v.name,
+              nameEn: v.nameEn || '',
+              nature: v.nature || 'custom',
               source: 'custom',
               type: v.type || 'continuous',
               lowerBound: v.lowerBound,
               upperBound: v.upperBound,
+              ontologyRef: v.ontologyRef,
+              ontologyPath: v.ontologyPath || getOntologyPath(v),
+              dimension: v.dimension || '',
+              domain: v.domain || v.type || 'continuous',
+              businessMeaning: v.businessMeaning || '',
+              unit: v.unit || '',
             })),
             objective: {
               sense: proposal.objective.sense,
@@ -736,10 +1439,11 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
             constraints: proposal.constraints.map((c, idx) => ({
               id: c.id || `c-${Date.now()}-${idx}`,
               name: c.name,
-              coefficients: {},
+              coefficients: c.coefficients || {},
               sense: c.sense || '<=',
-              rhs: c.rhs || 100,
+              rhs: c.rhs ?? 0,
             })),
+            orDsl,
           };
           onModelConfirmed(modelData);
         }
@@ -787,8 +1491,9 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
         } else {
           fullContent += text;
         }
+        const displayContent = stripModelJson(fullContent);
         setMessages(prev => prev.map(m =>
-          m.id === regenMsgId ? { ...m, content: fullContent, reasoning_content: fullReasoning } : m
+          m.id === regenMsgId ? { ...m, content: displayContent || '正在构建模型…', reasoning_content: fullReasoning } : m
         ));
       });
 
@@ -834,7 +1539,19 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
   };
 
   const handleNewSession = () => {
-    setCurrentSession(null);
+    // 如果当前有正在执行的结构化建模任务，让它在后台继续运行
+    if (activeControllerRef.current && structuredStreaming) {
+      backgroundTaskRef.current = {
+        controller: activeControllerRef.current,
+        sessionId: currentSession?.id,
+        startedAt: Date.now(),
+      };
+      activeControllerRef.current = null;
+      showToast('已创建新会话，原任务将在后台继续执行', 'info', 3000);
+    }
+
+    const newSession = createNewSession();
+    setCurrentSession(newSession);
     setMessages([{
       id: 1,
       type: 'agent',
@@ -852,6 +1569,9 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
     setEditableProposal(null);
     setUserModified(false);
     setModifiedFields(new Set());
+    setPendingClarification(null);
+    resetStructuredSteps();
+    setStructuredCurrentStep(0);
   };
 
   const handleSelectSession = (session) => {
@@ -997,7 +1717,19 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
             const reasoningText = msg.reasoning_content || '';
             const highlightMap = buildOntologyHighlightMap(ontologyLookup);
             const isStreaming = msg.streaming === true;
-            const reasoningSection = reasoningText ? (
+
+            // 结构化建模模式：展示步骤化思维链
+            const isStructured = msg.structuredMode === true;
+            const structuredSection = isStructured ? (
+              <StructuredThinkingChain
+                steps={structuredSteps}
+                currentStep={structuredCurrentStep}
+                isStreaming={structuredStreaming}
+                lookup={ontologyLookup}
+              />
+            ) : null;
+
+            const reasoningSection = (!isStructured && reasoningText) ? (
               <ThinkingChainPanel
                 thinking={reasoningText}
                 highlightMap={highlightMap}
@@ -1005,7 +1737,7 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
               />
             ) : null;
             // Show a "thinking started" placeholder when streaming but no reasoning yet
-            const thinkingPlaceholder = (isStreaming && !reasoningText) ? (
+            const thinkingPlaceholder = (!isStructured && isStreaming && !reasoningText) ? (
               <details className="agent-thinking-panel" style={{ marginBottom: 14 }} open>
                 <summary>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1020,15 +1752,47 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
             ) : null;
             return (
               <>
+                {/* Structured thinking chain */}
+                {structuredSection}
                 {/* Thinking chain — separate panel above the output bubble */}
                 {reasoningSection}
                 {thinkingPlaceholder}
                 {/* Main output bubble */}
                 <div className="agent-bubble" style={{ padding: '12px 16px' }}>
-                  <p style={{ fontSize: 14, lineHeight: 1.65, margin: 0, whiteSpace: 'pre-wrap', color: 'var(--fg)' }}>
-                    {msg.content}
-                    {isStreaming && <span className="streaming-cursor" />}
-                  </p>
+                  <div style={{ fontSize: 14, lineHeight: 1.65, whiteSpace: 'pre-wrap', color: 'var(--fg)' }}>
+                    {isStructured ? (
+                      msg.wizard && msg.clarification ? (
+                        <GuidedFeasibilityWizard
+                          issues={msg.clarification.issues || []}
+                          suggestion={msg.clarification.suggestion || ''}
+                          loading={loading}
+                          onSubmit={(fullText) => {
+                            setPendingClarification(null);
+                            handleSend(fullText);
+                          }}
+                          onCancel={() => {
+                            setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, wizard: false } : m));
+                            setPendingClarification(null);
+                          }}
+                        />
+                      ) : (
+                        <>
+                          <VariableTokenGroup
+                            text={msg.content}
+                            variableMap={buildVariableMap(msg.proposal?.variables || [])}
+                            ontologyName="本体模型"
+                            onVariableClick={(variable) => {
+                              setHighlightVariableId(variable?.id || variable?.name);
+                              setShowMappingModal(true);
+                            }}
+                          />
+                          {isStreaming && <span className="streaming-cursor" />}
+                        </>
+                      )
+                    ) : (
+                      <>{msg.content}{isStreaming && <span className="streaming-cursor" />}</>
+                    )}
+                  </div>
                 </div>
               </>
             );
@@ -1233,7 +1997,7 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
     const obj = proposal.objective || {};
 
     return (
-      <div className="proposal-panel">
+      <div className="proposal-panel" style={{ flex: '0 0 40%', width: 'auto' }}>
         {/* Title + Version + Modified Badge */}
         <div style={{
           padding: '12px 16px',
@@ -1279,32 +2043,34 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
         {/* Scrollable Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {/* Problem Type */}
-          <div className="proposal-section-card">
-            <div className="proposal-section-label">
-              <span style={{
-                width: 4, height: 4, borderRadius: '50%',
-                background: 'var(--primary)', display: 'inline-block', flexShrink: 0,
-              }} />
-              问题类型
+          <div className="proposal-section-card" style={{ padding: '8px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div className="proposal-section-label" style={{ marginBottom: 0 }}>
+                <span style={{
+                  width: 4, height: 4, borderRadius: '50%',
+                  background: 'var(--primary)', display: 'inline-block', flexShrink: 0,
+                }} />
+                优化类型
+              </div>
+              <select
+                value={proposal.problemType || 'LP'}
+                onChange={e => {
+                  setEditableProposal(prev => prev ? { ...prev, problemType: e.target.value } : prev);
+                  markModified('problemType');
+                }}
+                style={{
+                  fontSize: 12, fontWeight: 600, padding: '4px 12px',
+                  borderRadius: 20, border: '1px solid var(--border)',
+                  background: proposal.problemType === 'LP' ? '#dbeafe' : proposal.problemType === 'IP' ? '#ffedd5' : '#fee2e2',
+                  color: proposal.problemType === 'LP' ? '#1d4ed8' : proposal.problemType === 'IP' ? '#c2410c' : '#dc2626',
+                  cursor: 'pointer', outline: 'none', fontFamily: 'inherit',
+                }}
+              >
+                <option value="LP">LP(线性规划)</option>
+                <option value="IP">IP(整数规划)</option>
+                <option value="MIP">MIP(混合整数规划)</option>
+              </select>
             </div>
-            <select
-              value={proposal.problemType || 'LP'}
-              onChange={e => {
-                setEditableProposal(prev => prev ? { ...prev, problemType: e.target.value } : prev);
-                markModified('problemType');
-              }}
-              style={{
-                fontSize: 12, fontWeight: 600, padding: '5px 12px',
-                borderRadius: 20, border: '1px solid var(--border)',
-                background: proposal.problemType === 'LP' ? '#dbeafe' : proposal.problemType === 'MIP' ? '#ffedd5' : '#fee2e2',
-                color: proposal.problemType === 'LP' ? '#1d4ed8' : proposal.problemType === 'MIP' ? '#c2410c' : '#dc2626',
-                cursor: 'pointer', outline: 'none', fontFamily: 'inherit',
-              }}
-            >
-              <option value="LP">LP · 线性规划</option>
-              <option value="MIP">MIP · 混合整数</option>
-              <option value="QP">QP · 二次规划</option>
-            </select>
           </div>
 
           {/* Objective */}
@@ -1332,135 +2098,73 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
               </select>
               <span style={{ fontSize: 12, color: 'var(--fg-3)', fontWeight: 500 }}>=</span>
             </div>
-            {/* Coefficients */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {(obj.coefficients || []).map((coeff, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {idx > 0 && <span style={{ fontSize: 12, color: 'var(--fg-3)', width: 14, textAlign: 'center', fontWeight: 500 }}>+</span>}
-                  <input
-                    type="number"
-                    value={coeff.coefficient ?? 1}
-                    onChange={e => updateObjectCoeff(idx, 'coefficient', parseFloat(e.target.value) || 0)}
-                    placeholder="系数"
-                    className="proposal-field-input"
-                    style={{ width: 64, fontSize: 12 }}
-                  />
-                  <span style={{ fontSize: 12, color: 'var(--fg-3)' }}>×</span>
-                  <input
-                    value={coeff.variable || ''}
-                    onChange={e => updateObjectCoeff(idx, 'variable', e.target.value)}
-                    placeholder="变量名"
-                    className="proposal-field-input"
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    onClick={() => removeObjectCoeff(idx)}
-                    style={{
-                      ...btnBase, padding: '3px 6px', background: 'transparent',
-                      border: 'none', color: 'var(--fg-3)', fontSize: 16, lineHeight: 1,
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
-                    title="删除"
-                  >×</button>
-                </div>
-              ))}
-              <button
-                onClick={addObjectiveCoeff}
-                className="proposal-small-btn"
-                style={{ marginTop: 2 }}
-              >
-                + 添加项
-              </button>
-            </div>
-          </div>
-
-          {/* Variables */}
-          <div className="proposal-section-card">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div className="proposal-section-label" style={{ marginBottom: 0 }}>
-                <span style={{
-                  width: 4, height: 4, borderRadius: '50%',
-                  background: 'var(--accent)', display: 'inline-block', flexShrink: 0,
-                }} />
-                决策变量 ({vars.length})
-              </div>
-              <button onClick={addVariable} className="proposal-small-btn">+ 添加</button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {vars.map((v, idx) => (
-                <div key={v.id || idx} className="proposal-var-row">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                    {(() => {
-                      const ontoPath = matchVariableToOntology(v.name, ontologyLookup);
-                      return ontoPath ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
-                          onMouseEnter={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            setHoveredTooltip({ text: ontoPath, top: rect.top, left: rect.left + rect.width / 2 });
-                          }}
-                          onMouseLeave={() => setHoveredTooltip(null)}
-                        >
-                          <span style={{
-                            width: 9, height: 9, borderRadius: 2,
-                            background: '#3b82f6', display: 'inline-block', cursor: 'help',
-                          }} />
-                        </span>
-                      ) : null;
-                    })()}
+            {/* Coefficients - horizontal flow (filter out zero-coefficient terms) */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+              {(obj.coefficients || [])
+                .map((coeff, origIdx) => ({ coeff, origIdx }))
+                .filter(({ coeff }) => {
+                  const c = coeff.coefficient;
+                  // Keep: variable references ($paramName), non-zero numbers, undefined/null (default to 1)
+                  if (c === 0) return false;
+                  if (typeof c === 'string' && c.startsWith('$')) return true;
+                  return true;
+                })
+                .map(({ coeff, origIdx }, displayIdx) => {
+                const matchedVar = (proposal.variables || []).find(v => v.name === coeff.variable);
+                const coeffVal = String(coeff.coefficient ?? 1);
+                const isVarRef = coeffVal.startsWith('$');
+                return (
+                  <div key={origIdx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {displayIdx > 0 && (
+                      <span style={{ fontSize: 13, color: 'var(--fg-2)', fontWeight: 600, width: 14, textAlign: 'center' }}>
+                        {coeffVal.startsWith('-') ? '−' : '+'}
+                      </span>
+                    )}
                     <input
-                      value={v.name || ''}
-                      onChange={e => updateEditableVar(idx, 'name', e.target.value)}
-                      placeholder="变量名"
+                      type="text"
+                      value={coeff.coefficient ?? 1}
+                      onChange={e => updateObjectCoeff(origIdx, 'coefficient', normalizeCoefficient(e.target.value))}
+                      placeholder="系数或$变量"
                       className="proposal-field-input"
-                      style={{ flex: 1 }}
-                    />
-                    <select
-                      value={v.type || 'continuous'}
-                      onChange={e => updateEditableVar(idx, 'type', e.target.value)}
-                      className="proposal-select"
-                      style={{ fontSize: 11, fontWeight: 500, padding: '3px 8px', paddingRight: 22 }}
-                    >
-                      <option value="continuous">连续</option>
-                      <option value="integer">整数</option>
-                      <option value="binary">二进制</option>
-                    </select>
-                    <button
-                      onClick={() => removeVariable(idx)}
                       style={{
-                        ...btnBase, padding: '3px 6px', background: 'transparent',
-                        border: 'none', color: 'var(--fg-3)', fontSize: 16, lineHeight: 1,
+                        width: 72, fontSize: 12,
+                        ...(isVarRef ? { color: 'var(--accent)', fontStyle: 'italic', fontWeight: 600 } : {}),
+                      }}
+                      title="支持输入数字或 $变量名 引用其他变量"
+                    />
+                    {isVarRef && <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 600 }}>$</span>}
+                    <span style={{ fontSize: 13, color: 'var(--fg-3)', fontWeight: 500, fontFamily: 'serif' }}>·</span>
+                    {matchedVar ? (
+                      <VariableToken
+                        variable={matchedVar}
+                        className="proposal-var-token"
+                        onClick={() => {
+                          setHighlightVariableId(matchedVar.id || matchedVar.name);
+                          setShowMappingModal(true);
+                        }}
+                      />
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--fg)', fontWeight: 500 }}>{coeff.variable || '未命名'}</span>
+                    )}
+                    <button
+                      onClick={() => removeObjectCoeff(origIdx)}
+                      style={{
+                        ...btnBase, padding: '2px 5px', background: 'transparent',
+                        border: 'none', color: 'var(--fg-3)', fontSize: 13, lineHeight: 1,
                       }}
                       onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
                       onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
-                      title="删除变量"
-                    >×</button>
+                      title="删除此项"
+                    >✕</button>
                   </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500, marginBottom: 2, display: 'block' }}>下界</label>
-                      <input
-                        type="number"
-                        value={v.lowerBound ?? 0}
-                        onChange={e => updateEditableVar(idx, 'lowerBound', parseFloat(e.target.value) || 0)}
-                        className="proposal-field-input"
-                        style={{ fontSize: 11 }}
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500, marginBottom: 2, display: 'block' }}>上界</label>
-                      <input
-                        type="number"
-                        value={v.upperBound ?? ''}
-                        onChange={e => updateEditableVar(idx, 'upperBound', e.target.value === '' ? null : parseFloat(e.target.value))}
-                        placeholder="∞"
-                        className="proposal-field-input"
-                        style={{ fontSize: 11 }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
+              <button
+                onClick={addObjectiveCoeff}
+                className="proposal-small-btn"
+              >
+                + 添加项
+              </button>
             </div>
           </div>
 
@@ -1477,52 +2181,178 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
               <button onClick={addConstraint} className="proposal-small-btn">+ 添加</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {cons.map((c, idx) => (
-                <div key={c.id || idx} className="proposal-var-row">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              {cons.map((c, idx) => {
+                const activeVars = (proposal.variables || []).filter(v => {
+                  const cv = c.coefficients?.[v.name];
+                  return cv !== undefined && cv !== 0 && cv !== null;
+                });
+                return (
+                  <div key={c.id || idx} className="proposal-var-row">
+                    {/* Header: name + delete */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <input
+                        value={c.name || ''}
+                        onChange={e => updateEditableConstraint(idx, 'name', e.target.value)}
+                        placeholder="约束名"
+                        className="proposal-field-input"
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        onClick={() => removeConstraint(idx)}
+                        style={{
+                          ...btnBase, padding: '2px 5px', background: 'transparent',
+                          border: 'none', color: 'var(--fg-3)', fontSize: 13, lineHeight: 1,
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
+                        title="删除约束"
+                      >✕</button>
+                    </div>
+                    {/* Expression: coefficients ± sense rhs */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 6 }}>
+                      {activeVars.length === 0 && <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>暂无系数</span>}
+                      {(proposal.variables || []).map((v, vIdx) => {
+                        const coeff = c.coefficients?.[v.name] ?? 0;
+                        const coeffStr = String(coeff);
+                        if (!coeff || coeff === 0) return null;
+                        const isVarRef = coeffStr.startsWith('$');
+                        const isFirst = activeVars[0]?.name === v.name;
+                        const isNeg = coeffStr.startsWith('-');
+                        return (
+                          <div key={v.id || vIdx} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                            {!isFirst && (
+                              <span style={{ fontSize: 13, color: 'var(--fg-2)', fontWeight: 600, margin: '0 2px' }}>
+                                {isNeg ? '−' : '+'}
+                              </span>
+                            )}
+                            {isFirst && isNeg && (
+                              <span style={{ fontSize: 13, color: 'var(--fg-2)', fontWeight: 600, marginRight: 2 }}>−</span>
+                            )}
+                            <input
+                              type="text"
+                              value={coeff}
+                              onChange={e => {
+                                const nextCoeffs = { ...(c.coefficients || {}) };
+                                const val = normalizeCoefficient(e.target.value);
+                                if (val === null || val === 0) {
+                                  delete nextCoeffs[v.name];
+                                } else {
+                                  nextCoeffs[v.name] = val;
+                                }
+                                updateEditableConstraint(idx, 'coefficients', nextCoeffs);
+                              }}
+                              placeholder="系数"
+                              className="proposal-field-input"
+                              style={{
+                                width: 64, fontSize: 11,
+                                ...(isVarRef ? { color: 'var(--accent)', fontStyle: 'italic', fontWeight: 600 } : {}),
+                              }}
+                              title="支持输入数字或 $变量名 引用其他变量"
+                            />
+                            {isVarRef && <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 600 }}>$</span>}
+                            <span style={{ fontSize: 13, color: 'var(--fg-3)', fontWeight: 500, fontFamily: 'serif' }}>·</span>
+                            <VariableToken
+                              variable={v}
+                              className="proposal-var-token-sm"
+                              onClick={() => {
+                                setHighlightVariableId(v.id || v.name);
+                                setShowMappingModal(true);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                      {/* sense + rhs */}
+                      <span style={{ fontSize: 15, color: 'var(--fg-2)', fontWeight: 700, margin: '0 6px', fontFamily: 'serif' }}>
+                        {c.sense === '<=' ? '≤' : c.sense === '>=' ? '≥' : '='}
+                      </span>
+                      <input
+                        type="number"
+                        value={c.rhs ?? 0}
+                        onChange={e => updateEditableConstraint(idx, 'rhs', parseFloat(e.target.value) || 0)}
+                        placeholder="右值"
+                        className="proposal-field-input"
+                        style={{ width: 68, fontSize: 12 }}
+                      />
+                    </div>
                     <input
-                      value={c.name || ''}
-                      onChange={e => updateEditableConstraint(idx, 'name', e.target.value)}
-                      placeholder="约束名"
+                      value={c.description || ''}
+                      onChange={e => updateEditableConstraint(idx, 'description', e.target.value)}
+                      placeholder="约束描述（可选）"
                       className="proposal-field-input"
-                      style={{ flex: 1 }}
+                      style={{ fontSize: 11, fontFamily: 'inherit', marginTop: 4 }}
                     />
-                    <select
-                      value={c.sense || '<='}
-                      onChange={e => updateEditableConstraint(idx, 'sense', e.target.value)}
-                      className="proposal-select"
-                      style={{ fontSize: 12, fontWeight: 600, padding: '4px 8px', paddingRight: 22, width: 52 }}
-                    >
-                      <option value="<=">≤</option>
-                      <option value=">=">≥</option>
-                      <option value="==">=</option>
-                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Variables / Bounds */}
+          <div className="proposal-section-card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div className="proposal-section-label" style={{ marginBottom: 0 }}>
+                <span style={{
+                  width: 4, height: 4, borderRadius: '50%',
+                  background: 'var(--accent)', display: 'inline-block', flexShrink: 0,
+                }} />
+                取值范围 ({vars.length})
+              </div>
+              <button onClick={addVariable} className="proposal-small-btn">+ 添加</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {vars.map((v, idx) => (
+                <div key={v.id || idx} className="proposal-var-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <VariableToken
+                    variable={v}
+                    className="proposal-var-token"
+                    onClick={() => {
+                      setHighlightVariableId(v.id || v.name);
+                      setShowMappingModal(true);
+                    }}
+                  />
+                  <select
+                    value={v.type || 'continuous'}
+                    onChange={e => updateEditableVar(idx, 'type', e.target.value)}
+                    className="proposal-select"
+                    style={{ fontSize: 11, fontWeight: 500, padding: '3px 8px', paddingRight: 22 }}
+                  >
+                    <option value="continuous">连续</option>
+                    <option value="integer">整数</option>
+                    <option value="binary">二进制</option>
+                  </select>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500 }}>下界</label>
                     <input
                       type="number"
-                      value={c.rhs ?? 0}
-                      onChange={e => updateEditableConstraint(idx, 'rhs', parseFloat(e.target.value) || 0)}
-                      placeholder="右值"
+                      value={v.lowerBound ?? 0}
+                      onChange={e => updateEditableVar(idx, 'lowerBound', parseFloat(e.target.value) || 0)}
                       className="proposal-field-input"
-                      style={{ width: 64, fontSize: 12 }}
+                      style={{ width: 72, fontSize: 11 }}
                     />
-                    <button
-                      onClick={() => removeConstraint(idx)}
-                      style={{
-                        ...btnBase, padding: '3px 6px', background: 'transparent',
-                        border: 'none', color: 'var(--fg-3)', fontSize: 16, lineHeight: 1,
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
-                      title="删除约束"
-                    >×</button>
                   </div>
-                  <input
-                    value={c.description || ''}
-                    onChange={e => updateEditableConstraint(idx, 'description', e.target.value)}
-                    placeholder="约束描述（可选）"
-                    className="proposal-field-input"
-                    style={{ fontSize: 11, fontFamily: 'inherit' }}
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500 }}>上界</label>
+                    <input
+                      type="number"
+                      value={v.upperBound ?? ''}
+                      onChange={e => updateEditableVar(idx, 'upperBound', e.target.value === '' ? null : parseFloat(e.target.value))}
+                      placeholder="∞"
+                      className="proposal-field-input"
+                      style={{ width: 72, fontSize: 11 }}
+                    />
+                  </div>
+                  <button
+                    onClick={() => removeVariable(idx)}
+                    style={{
+                      ...btnBase, padding: '2px 5px', background: 'transparent',
+                      border: 'none', color: 'var(--fg-3)', fontSize: 13, lineHeight: 1,
+                      marginLeft: 'auto',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
+                    title="删除变量"
+                  >✕</button>
                 </div>
               ))}
             </div>
@@ -1608,12 +2438,12 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
           onNewSession={handleNewSession}
         />
 
-        {/* ── Chat Column ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+        {/*  Chat Column ── */}
+        <div style={{ flex: (activeProposal || proposalHistory.length > 0) ? '0 0 50%' : 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
           {/* Messages */}
           <div className="agent-messages-area">
             {messages.map((msg, idx) => renderMessage(msg, idx))}
-            {loading && !messages.some(m => m.streaming) && renderLoading()}
+            {loading && !messages.some(m => m.streaming) && !structuredStreaming && renderLoading()}
             <div ref={messagesEndRef} />
           </div>
 
@@ -1665,6 +2495,14 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
           <span className="status-dot-pulse" />
           <span>正在收集信息以构建模型 ({clarificationCount}/4 轮)</span>
         </div>
+      )}
+
+      {/* ── Ontology Mapping Modal ── */}
+      {showMappingModal && (
+        <OntologyModelMappingModal
+          onClose={() => setShowMappingModal(false)}
+          highlightVariableId={highlightVariableId}
+        />
       )}
 
       {/* ── Portal Tooltip for Ontology Badges ── */}

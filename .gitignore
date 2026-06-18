@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+backend/venv/
+
+# Build output
+dist/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+.env.local
+
+# Database
+*.sqlite
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test/temp files
+test_*.py
+test_*.js
+test_*.mjs
+*.cpp
+
+# Screenshots/docs (not code)
+*.png
+DEEP_RESEARCH_*.md
+brainstorm_*.md
+overview.md
+backend_docs.png
+solve-result-preview.html
+
+# Work buddy
+.workbuddy/

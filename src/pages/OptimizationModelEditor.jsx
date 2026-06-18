@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Calculator, Sparkles, FileUp, X, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Save, Calculator, Sparkles, FileUp, X, ChevronRight, Eye, Database } from 'lucide-react';
 import { api } from '../api/apiClient';
 import VisualModelingPanel from '../components/VisualModelingPanel';
 import MathPreviewPanel from '../components/MathPreviewPanel';
 import SolveResultPanel from '../components/SolveResultPanel';
 import AIAgentChat from '../components/AIAgentChat';
+import OntologyModelMappingModal from '../components/OntologyModelMappingModal';
+import DslViewPanel from '../components/DslViewPanel';
+import PythonViewPanel from '../components/PythonViewPanel';
 
 const STATUS_BADGE = {
   active: 'bg-green-100 text-green-700',
@@ -36,228 +39,6 @@ function parseLPVariables(text) {
   return matches;
 }
 
-function parseMPSFile(text) {
-  const result = {
-    name: '',
-    objectiveSense: 'minimize',
-    variables: [],
-    objective: { sense: 'minimize', coefficients: {} },
-    constraints: [],
-    bounds: {},
-  };
-
-  const lines = text.split('\n');
-  let currentSection = '';
-  
-  const rows = {};
-  const columns = {};
-  const rhsValues = {};
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    if (line.startsWith('NAME')) {
-      currentSection = 'NAME';
-      result.name = line.substring(4).trim().replace(/['"]/g, '');
-    }
-    
-    if (line.startsWith('OBJSENSE')) {
-      currentSection = 'OBJSENSE';
-    }
-    
-    if (line.startsWith('ROWS')) {
-      currentSection = 'ROWS';
-    }
-    
-    if (line.startsWith('COLUMNS')) {
-      currentSection = 'COLUMNS';
-    }
-    
-    if (line.startsWith('RHS') || line.trim().startsWith('RHS')) {
-      currentSection = 'RHS';
-    }
-    
-    if (line.startsWith('BOUNDS') || line.trim().startsWith('BOUNDS')) {
-      currentSection = 'BOUNDS';
-    }
-    
-    if (line.startsWith('ENDATA') || line.startsWith('END')) {
-      break;
-    }
-
-    switch (currentSection) {
-      case 'OBJSENSE':
-        if (line === 'MIN') {
-          result.objectiveSense = 'minimize';
-          result.objective.sense = 'minimize';
-        } else if (line === 'MAX') {
-          result.objectiveSense = 'maximize';
-          result.objective.sense = 'maximize';
-        }
-        break;
-
-      case 'ROWS': {
-        const parts = line.split(/\s+/);
-        if (parts.length >= 2) {
-          const rowType = parts[0];
-          const rowName = parts[1].replace(/['"]/g, '');
-          rows[rowName] = { type: rowType, rhs: 0 };
-        }
-        break;
-      }
-
-      case 'COLUMNS': {
-        if (line.includes("'MARKER'")) continue;
-        
-        const parts = line.split(/\s+/).filter(p => p && !p.startsWith("'"));
-        if (parts.length >= 3) {
-          const colName = parts[0];
-          const rowName1 = parts[1];
-          const value1 = parseFloat(parts[2]);
-          
-          if (!columns[colName]) {
-            columns[colName] = { coefficients: {}, isInteger: false };
-          }
-          
-          columns[colName].coefficients[rowName1] = (columns[colName].coefficients[rowName1] || 0) + value1;
-          
-          if (parts.length >= 5) {
-            const rowName2 = parts[3];
-            const value2 = parseFloat(parts[4]);
-            columns[colName].coefficients[rowName2] = (columns[colName].coefficients[rowName2] || 0) + value2;
-          }
-        }
-        break;
-      }
-
-      case 'RHS': {
-        const parts = line.split(/\s+/).filter(p => p && !p.startsWith("'"));
-        if (parts.length >= 3) {
-          const rowName = parts[1];
-          const value = parseFloat(parts[2]);
-          rhsValues[rowName] = (rhsValues[rowName] || 0) + value;
-          
-          if (parts.length >= 5) {
-            const rowName2 = parts[3];
-            const value2 = parseFloat(parts[4]);
-            rhsValues[rowName2] = (rhsValues[rowName2] || 0) + value2;
-          }
-        }
-        break;
-      }
-
-      case 'BOUNDS': {
-        const parts = line.split(/\s+/).filter(p => p && !p.startsWith("'"));
-        if (parts.length >= 3) {
-          const boundType = parts[0];
-          const varName = parts[2];
-          const value = parts.length >= 4 ? parseFloat(parts[3]) : null;
-          
-          if (!result.bounds[varName]) {
-            result.bounds[varName] = {};
-          }
-          
-          switch (boundType) {
-            case 'BV':
-              result.bounds[varName].type = 'binary';
-              result.bounds[varName].lower = 0;
-              result.bounds[varName].upper = 1;
-              if (columns[varName]) {
-                columns[varName].isInteger = true;
-              }
-              break;
-            case 'LI':
-              result.bounds[varName].lower = -Infinity;
-              break;
-            case 'UI':
-              result.bounds[varName].upper = Infinity;
-              break;
-            case 'LO':
-              result.bounds[varName].lower = value;
-              break;
-            case 'UP':
-              result.bounds[varName].upper = value;
-              break;
-            case 'FX':
-              result.bounds[varName].lower = value;
-              result.bounds[varName].upper = value;
-              break;
-            case 'FR':
-              result.bounds[varName].lower = -Infinity;
-              result.bounds[varName].upper = Infinity;
-              break;
-            case 'MI':
-              result.bounds[varName].lower = -Infinity;
-              break;
-            case 'PL':
-              result.bounds[varName].upper = Infinity;
-              break;
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  result.variables = Object.keys(columns).map(name => {
-    const bounds = result.bounds[name] || {};
-    return {
-      name,
-      isInteger: columns[name].isInteger,
-      lowerBound: bounds.lower !== undefined ? (bounds.lower === -Infinity ? null : bounds.lower) : 0,
-      upperBound: bounds.upper !== undefined ? (bounds.upper === Infinity ? null : bounds.upper) : null,
-    };
-  });
-
-  for (const [colName, colData] of Object.entries(columns)) {
-    for (const [rowName, coeff] of Object.entries(colData.coefficients)) {
-      if (rows[rowName]?.type === 'N') {
-        result.objective.coefficients[colName] = (result.objective.coefficients[colName] || 0) + coeff;
-      }
-    }
-  }
-
-  for (const [rowName, rowData] of Object.entries(rows)) {
-    if (rowData.type === 'N') continue;
-    
-    const constraint = {
-      name: rowName,
-      coefficients: {},
-      sense: rowData.type === 'L' ? '<=' : (rowData.type === 'G' ? '>=' : '=='),
-      rhs: rhsValues[rowName] || 0,
-    };
-    
-    for (const [colName, colData] of Object.entries(columns)) {
-      if (colData.coefficients[rowName]) {
-        constraint.coefficients[colName] = colData.coefficients[rowName];
-      }
-    }
-    
-    result.constraints.push(constraint);
-  }
-
-  return result;
-}
-
-function buildObjectiveExpression(objective, variables) {
-  const parts = [];
-  const varMap = {};
-  variables.forEach(v => { varMap[v.id] = v.name; });
-  for (const [varId, coeff] of Object.entries(objective.coefficients)) {
-    const name = varMap[varId] || varId;
-    if (coeff === 0) continue;
-    if (coeff === 1) parts.push(name);
-    else if (coeff === -1) parts.push(`-${name}`);
-    else {
-      const absCoeff = Math.abs(coeff);
-      const sign = coeff > 0 ? '' : '-';
-      parts.push(`${sign}${absCoeff}*${name}`);
-    }
-  }
-  return parts.join(' + ').replace(/\+ -/g, '- ');
-}
-
 export default function OptimizationModelEditor() {
   const navigate = useNavigate();
   const { wsId, id } = useParams();
@@ -268,7 +49,7 @@ export default function OptimizationModelEditor() {
   const [modelDescription, setModelDescription] = useState('');
   const [modelStatus, setModelStatus] = useState('draft');
   const [variables, setVariables] = useState([]);
-  const [objective, setObjective] = useState({ sense: 'maximize', coefficients: {} });
+  const [objectives, setObjectives] = useState([{ id: 'obj-1', name: '目标函数', sense: 'maximize', coefficients: {} }]);
   const [constraints, setConstraints] = useState([]);
   const [problemType, setProblemType] = useState('LP');
   const [saving, setSaving] = useState(false);
@@ -283,6 +64,10 @@ export default function OptimizationModelEditor() {
 
   const [showAIModal, setShowAIModal] = useState(false);
   const [showFileImportModal, setShowFileImportModal] = useState(false);
+  const [showMappingModal, setShowMappingModal] = useState(false);
+  const [activeView, setActiveView] = useState('visual'); // 'visual' | 'dsl' | 'python'
+  const [orDsl, setOrDsl] = useState(null);
+  const [showViewDropdown, setShowViewDropdown] = useState(false);
   const [importFile, setImportFile] = useState(null);
   const [importContent, setImportContent] = useState('');
   const [importParsed, setImportParsed] = useState(null);
@@ -291,6 +76,13 @@ export default function OptimizationModelEditor() {
     api.get('/ontology/')
       .then(data => setOntologies(data || []))
       .catch(err => console.error('加载本体数据失败:', err));
+  }, []);
+
+  // 监听本体-模型映射模态框关闭事件
+  useEffect(() => {
+    const handleClose = () => setShowMappingModal(false);
+    window.addEventListener('close-mapping-modal', handleClose);
+    return () => window.removeEventListener('close-mapping-modal', handleClose);
   }, []);
 
   useEffect(() => {
@@ -306,15 +98,32 @@ export default function OptimizationModelEditor() {
         setVariables((data.variables || []).map(v => ({
           id: v.id,
           name: v.name,
+          nameEn: v.nameEn || v.name_en || '',
           type: v.type || 'continuous',
           lowerBound: v.lower_bound ?? 0,
           upperBound: v.upper_bound ?? null,
+          ontologyRef: v.ontology_ref || v.ontologyRef,
+          ontologyPath: v.ontology_path || v.ontologyPath,
+          nature: v.nature || '',
+          dimension: v.dimension || '',
+          domain: v.domain || '',
+          businessMeaning: v.business_meaning || v.businessMeaning || '',
+          unit: v.unit || '',
         })));
-        if (data.objective) {
-          setObjective({
+        if (data.objectives && data.objectives.length > 0) {
+          setObjectives(data.objectives.map((o, i) => ({
+            id: o.id || `obj-${i + 1}`,
+            name: o.name || `目标函数${i + 1}`,
+            sense: o.sense || 'maximize',
+            coefficients: parseExpressionToCoefficients(o.expression || '', data.variables || []),
+          })));
+        } else if (data.objective) {
+          setObjectives([{
+            id: 'obj-1',
+            name: '目标函数',
             sense: data.objective.sense || 'maximize',
             coefficients: parseExpressionToCoefficients(data.objective.expression || '', data.variables || []),
-          });
+          }]);
         }
         setConstraints((data.constraints || []).map(c => ({
           id: c.id,
@@ -391,18 +200,27 @@ export default function OptimizationModelEditor() {
     );
   }
 
-  const handleModelGenerated = ({ variables: newVars, objective: newObj, constraints: newCons, problemType: newType, rawContent, rawFormat }) => {
+  const handleModelGenerated = ({ variables: newVars, objective: newObj, objectives: newObjs, constraints: newCons, problemType: newType, rawContent, rawFormat, orDsl: generatedOrDsl }) => {
     setVariables(newVars);
-    setObjective(newObj);
+    if (newObjs && newObjs.length > 0) {
+      setObjectives(newObjs);
+    } else if (newObj) {
+      setObjectives([{ id: 'obj-1', name: '目标函数', sense: newObj.sense || 'maximize', coefficients: newObj.coefficients || {} }]);
+    }
     setConstraints(newCons);
     if (newType) setProblemType(newType);
+    if (generatedOrDsl) setOrDsl(generatedOrDsl);
     if (rawContent) {
       setRawFileContent(rawContent);
-      setRawFileFormat(rawFormat || 'mps');
+      setRawFileFormat(rawFormat || 'lp');
     }
     setShowAIModal(false);
     setShowFileImportModal(false);
     setImportParsed(null);
+    // 如果生成了 OR-DSL，自动切换到 DSL 视图展示
+    if (generatedOrDsl) {
+      setActiveView('dsl');
+    }
   };
 
   const buildExpression = (coefficients, vars) => {
@@ -411,8 +229,15 @@ export default function OptimizationModelEditor() {
     vars.forEach(v => { varMap[v.id] = v.name; });
 
     for (const [varId, coeff] of Object.entries(coefficients)) {
-      if (coeff === 0) continue;
+      if (coeff === 0 || coeff === null || coeff === undefined || coeff === '') continue;
       const name = varMap[varId] || varId;
+      // 支持 "$变量名" 形式的系数占位符
+      if (typeof coeff === 'string') {
+        if (coeff.startsWith('$')) {
+          parts.push(`${coeff}*${name}`);
+        }
+        continue;
+      }
       if (coeff === 1) parts.push(name);
       else if (coeff === -1) parts.push(`-${name}`);
       else {
@@ -425,6 +250,17 @@ export default function OptimizationModelEditor() {
   };
 
   const handleSave = async () => {
+    // 必填校验：中文名称 + 英文名称
+    const missingName = variables.find(v => !v.name?.trim());
+    const missingNameEn = variables.find(v => !v.nameEn?.trim());
+    if (missingName || missingNameEn) {
+      const msgs = [];
+      if (missingName) msgs.push('存在变量缺少中文名称');
+      if (missingNameEn) msgs.push('存在变量缺少英文名称');
+      alert(`必填校验未通过: ${msgs.join('、')}`);
+      return;
+    }
+
     setSaving(true);
     try {
       const modelData = {
@@ -432,13 +268,16 @@ export default function OptimizationModelEditor() {
         description: modelDescription,
         problem_type: problemType,
         status: modelStatus,
-        objective: {
-          sense: objective.sense,
-          expression: buildExpression(objective.coefficients, variables),
-        },
+        objectives: objectives.map(o => ({
+          id: o.id,
+          name: o.name,
+          sense: o.sense,
+          expression: buildExpression(o.coefficients, variables),
+        })),
         variables: variables.map(v => ({
           id: v.id,
           name: v.name,
+          nameEn: v.nameEn || '',
           type: v.type || 'continuous',
           lower_bound: v.lowerBound ?? 0,
           upper_bound: v.upperBound ?? null,
@@ -469,14 +308,18 @@ export default function OptimizationModelEditor() {
 
   const handleSolve = async () => {
     const hasVars = variables.length > 0;
-    const hasObjCoeffs = objective?.coefficients && Object.values(objective.coefficients).some(c => c !== 0);
+    const hasObjCoeffs = objectives.some(o => o.coefficients && Object.values(o.coefficients).some(c => c !== 0));
     const hasConstraints = constraints.length > 0;
+    const missingName = variables.find(v => !v.name?.trim());
+    const missingNameEn = variables.find(v => !v.nameEn?.trim());
 
-    if (!hasVars || !hasObjCoeffs || !hasConstraints) {
+    if (!hasVars || !hasObjCoeffs || !hasConstraints || missingName || missingNameEn) {
       const msgs = [];
       if (!hasVars) msgs.push('缺少决策变量');
       if (!hasObjCoeffs) msgs.push('目标函数未定义');
       if (!hasConstraints) msgs.push('缺少约束条件');
+      if (missingName) msgs.push('变量缺少中文名称');
+      if (missingNameEn) msgs.push('变量缺少英文名称');
       alert(`模型不完整: ${msgs.join('、')}`);
       return;
     }
@@ -485,24 +328,25 @@ export default function OptimizationModelEditor() {
 
     try {
       if (rawFileContent) {
-        const result = await api.post('/optimization/solve-mps', {
+        const result = await api.post('/optimization/solve-lp', {
           content: rawFileContent,
-          format: rawFileFormat || 'mps',
+          format: 'lp',
         });
         result.variables = variables;
-        result.objective = objective;
+        result.objectives = objectives;
         result.constraints = constraints;
         setSolveResult(result);
         setShowResult(true);
       } else {
+        const primaryObj = objectives[0] || { sense: 'maximize', coefficients: {} };
         const modelDef = {
           name: modelName,
           description: modelDescription,
           problem_type: problemType,
           status: 'draft',
           objective: {
-            sense: objective.sense,
-            expression: buildExpression(objective.coefficients, variables),
+            sense: primaryObj.sense,
+            expression: buildExpression(primaryObj.coefficients, variables),
           },
           variables: variables.map(v => ({
             id: v.id,
@@ -527,14 +371,17 @@ export default function OptimizationModelEditor() {
         const result = await api.post(`/optimization/${savedModel.id}/solve`);
 
         result.variables = variables;
-        result.objective = objective;
+        result.objectives = objectives;
         result.constraints = constraints;
         setSolveResult(result);
         setShowResult(true);
       }
     } catch (error) {
       console.error('Failed to solve model:', error);
-      alert('求解失败: ' + (error.message || '请检查网络连接或模型定义'));
+      const errMsg = typeof error?.message === 'string' ? error.message
+        : typeof error === 'string' ? error
+        : JSON.stringify(error?.responseData || error?.detail || error || '未知错误');
+      alert('求解失败: ' + errMsg);
     } finally {
       setSolving(false);
     }
@@ -552,7 +399,7 @@ export default function OptimizationModelEditor() {
     const droppedFile = e.dataTransfer.files?.[0];
     if (!droppedFile) return;
     const ext = droppedFile.name.split('.').pop().toLowerCase();
-    if (!['lp', 'mps'].includes(ext)) return;
+    if (!['lp'].includes(ext)) return;
     processFile(droppedFile);
   };
 
@@ -568,34 +415,39 @@ export default function OptimizationModelEditor() {
     });
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const content = e.target.result;
       setImportContent(content);
 
       const ext = selectedFile.name.split('.').pop().toLowerCase();
-      let result = null;
 
-      if (ext === 'mps') {
-        result = parseMPSFile(content);
-      } else if (ext === 'lp') {
-        const vars = parseLPVariables(content);
-        result = {
-          name: selectedFile.name.replace('.lp', ''),
-          objectiveSense: 'minimize',
-          variables: vars.map(name => ({
-            name,
-            isInteger: false,
-            lowerBound: 0,
-            upperBound: null,
-          })),
-          objective: { sense: 'minimize', coefficients: {} },
-          constraints: [],
-          bounds: {},
-        };
-      }
-
-      if (result) {
-        setImportParsed(result);
+      try {
+        // Use backend API for authoritative parsing
+        const result = await api.post('/optimization/parse-file', {
+          content,
+          file_format: ext,
+        });
+        if (result) {
+          setImportParsed(result);
+        }
+      } catch (err) {
+        console.warn('后端解析失败，降级到客户端解析:', err.message);
+        // Fallback to client-side parsing (LP only)
+        let result = null;
+        if (ext === 'lp') {
+          const vars = parseLPVariables(content);
+          result = {
+            name: selectedFile.name.replace('.lp', ''),
+            objectiveSense: 'minimize',
+            variables: vars.map(name => ({
+              name, isInteger: false, lowerBound: 0, upperBound: null,
+            })),
+            objective: { sense: 'minimize', coefficients: {} },
+            constraints: [],
+            bounds: {},
+          };
+        }
+        if (result) setImportParsed(result);
       }
     };
     reader.readAsText(selectedFile);
@@ -607,24 +459,25 @@ export default function OptimizationModelEditor() {
     setImportParsed(null);
   };
 
-  const handleApplyFile = () => {
+  const handleApplyFile = async () => {
     if (!importParsed || !importParsed.variables.length) return;
 
     const autoMappedVariables = importParsed.variables.map((varData, idx) => ({
       id: `v-file-${idx + 1}`,
       name: varData.name,
+      nameEn: varData.name,
       source: 'custom',
-      type: varData.isInteger ? 'integer' : 'continuous',
-      lowerBound: varData.lowerBound,
-      upperBound: varData.upperBound,
+      type: varData.isInteger ? 'integer' : varData.isBinary ? 'binary' : 'continuous',
+      lowerBound: varData.lowerBound ?? 0,
+      upperBound: varData.upperBound ?? null,
     }));
 
     const varIdMap = {};
     autoMappedVariables.forEach(v => { varIdMap[v.name] = v.id; });
 
-    const autoMappedConstraints = importParsed.constraints.map((c, idx) => {
+    const autoMappedConstraints = (importParsed.constraints || []).map((c, idx) => {
       const coefficients = {};
-      for (const [varName, coeff] of Object.entries(c.coefficients)) {
+      for (const [varName, coeff] of Object.entries(c.coefficients || {})) {
         const varId = varIdMap[varName];
         if (varId) coefficients[varId] = coeff;
       }
@@ -638,22 +491,57 @@ export default function OptimizationModelEditor() {
     });
 
     const autoObjCoefficients = {};
-    for (const [varName, coeff] of Object.entries(importParsed.objective.coefficients)) {
+    for (const [varName, coeff] of Object.entries(importParsed.objective?.coefficients || {})) {
       const varId = varIdMap[varName];
       if (varId) autoObjCoefficients[varId] = coeff;
     }
 
-    handleModelGenerated({
-      problemType: importParsed.variables.some(v => v.isInteger) ? 'MIP' : 'LP',
+    const modelData = {
+      problemType: importParsed.variables.some(v => v.isInteger || v.isBinary) ? 'MIP' : 'LP',
       variables: autoMappedVariables,
-      objective: {
-        sense: importParsed.objective.sense,
+      objectives: [{
+        id: 'obj-1',
+        name: '目标函数',
+        sense: importParsed.objective?.sense || importParsed.objectiveSense || 'minimize',
         coefficients: autoObjCoefficients,
-      },
+      }],
       constraints: autoMappedConstraints,
       rawContent: importContent,
       rawFormat: importFile.name.split('.').pop().toLowerCase(),
-    });
+    };
+
+    handleModelGenerated(modelData);
+
+    // Async: generate DSL and Python code for view panels
+    try {
+      const modelDef = {
+        name: importParsed.name || importFile.name,
+        problem_type: modelData.problemType,
+        variables: importParsed.variables.map(v => ({
+          id: varIdMap[v.name], name: v.name,
+          type: v.isInteger ? 'integer' : v.isBinary ? 'binary' : 'continuous',
+          lower_bound: v.lowerBound ?? 0, upper_bound: v.upperBound ?? null,
+        })),
+        objective: {
+          sense: importParsed.objective?.sense || 'minimize',
+          expression: Object.entries(importParsed.objective?.coefficients || {})
+            .filter(([, c]) => c !== 0)
+            .map(([name, c]) => c === 1 ? name : c === -1 ? `-${name}` : `${c}*${name}`)
+            .join(' + ').replace(/\+ -/g, '- ') || '0',
+        },
+        constraints: (importParsed.constraints || []).map(c => ({
+          id: c.name, name: c.name,
+          expression: Object.entries(c.coefficients || {})
+            .filter(([, coeff]) => coeff !== 0)
+            .map(([name, coeff]) => coeff === 1 ? name : coeff === -1 ? `-${name}` : `${coeff}*${name}`)
+            .join(' + ').replace(/\+ -/g, '- ') || '0',
+          sense: c.sense, rhs: c.rhs,
+        })),
+      };
+      // Fire and forget - generate DSL + Python in background
+      api.post('/optimization/generate-dsl', modelDef).catch(() => {});
+      api.post('/optimization/generate-python', modelDef).catch(() => {});
+    } catch {}
   };
 
   return (
@@ -685,6 +573,13 @@ export default function OptimizationModelEditor() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            className="border border-purple-300 hover:bg-purple-50 text-purple-600 rounded-md px-3 py-1.5 text-sm flex items-center gap-1.5"
+            onClick={() => setShowMappingModal(true)}
+          >
+            <Database size={14} />
+            本体-模型映射
+          </button>
+          <button
             className="border border-blue-300 hover:bg-blue-50 text-blue-600 rounded-md px-3 py-1.5 text-sm flex items-center gap-1.5"
             onClick={() => setShowAIModal(true)}
           >
@@ -698,6 +593,34 @@ export default function OptimizationModelEditor() {
             <FileUp size={14} />
             文件导入
           </button>
+          {/* View Switcher */}
+          <div className="relative">
+            <button
+              className="border border-slate-300 hover:bg-slate-50 text-slate-600 rounded-md px-3 py-1.5 text-sm flex items-center gap-1.5"
+              onClick={() => setShowViewDropdown(v => !v)}
+            >
+              <Eye size={14} />
+              {activeView === 'visual' ? '可视化' : activeView === 'dsl' ? 'DSL' : 'Python'}
+              <ChevronRight size={12} className={`transition-transform ${showViewDropdown ? 'rotate-90' : ''}`} />
+            </button>
+            {showViewDropdown && (
+              <div className="absolute top-full right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-36 py-1">
+                {[
+                  { key: 'visual', label: '可视化视图' },
+                  { key: 'dsl', label: 'DSL 视图' },
+                  { key: 'python', label: 'Python 视图' },
+                ].map(v => (
+                  <button
+                    key={v.key}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${activeView === v.key ? 'text-blue-600 font-medium bg-blue-50' : 'text-slate-700'}`}
+                    onClick={() => { setActiveView(v.key); setShowViewDropdown(false); }}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             className="border border-blue-300 hover:bg-blue-50 text-blue-600 rounded-md px-3 py-1.5 text-sm flex items-center gap-1.5"
             onClick={handleSolve}
@@ -718,26 +641,49 @@ export default function OptimizationModelEditor() {
       </div>
 
       <div className="flex flex-1 min-h-0">
-        <div className="flex-1 overflow-y-auto">
-          <VisualModelingPanel
+        {/* 可视化视图 - 始终挂载，通过 CSS 显示/隐藏 */}
+        <div className={`flex flex-1 min-h-0 ${activeView === 'visual' ? '' : 'hidden'}`}>
+          <div className="flex-1 overflow-y-auto">
+            <VisualModelingPanel
+              variables={variables}
+              setVariables={setVariables}
+              objectives={objectives}
+              setObjectives={setObjectives}
+              constraints={constraints}
+              setConstraints={setConstraints}
+              problemType={problemType}
+              setProblemType={setProblemType}
+              ontologies={ontologies}
+            />
+          </div>
+          <div className="w-[380px] border-l border-slate-200 overflow-y-auto bg-slate-50 flex-shrink-0">
+            <MathPreviewPanel
+              variables={variables}
+              objectives={objectives}
+              constraints={constraints}
+              problemType={problemType}
+            />
+          </div>
+        </div>
+        {/* DSL 视图 - 始终挂载，通过 CSS 显示/隐藏，保持实时同步 */}
+        <div className={`flex-1 min-h-0 ${activeView === 'dsl' ? '' : 'hidden'}`}>
+          <DslViewPanel
             variables={variables}
-            setVariables={setVariables}
-            objective={objective}
-            setObjective={setObjective}
+            objectives={objectives}
             constraints={constraints}
-            setConstraints={setConstraints}
             problemType={problemType}
-            setProblemType={setProblemType}
-            ontologies={ontologies}
+            modelName={modelName}
+            orDsl={orDsl}
           />
         </div>
-
-        <div className="w-[380px] border-l border-slate-200 overflow-y-auto bg-slate-50 flex-shrink-0">
-          <MathPreviewPanel
+        {/* Python 视图 - 始终挂载，通过 CSS 显示/隐藏，保持实时同步 */}
+        <div className={`flex-1 min-h-0 ${activeView === 'python' ? '' : 'hidden'}`}>
+          <PythonViewPanel
             variables={variables}
-            objective={objective}
+            objectives={objectives}
             constraints={constraints}
             problemType={problemType}
+            modelName={modelName}
           />
         </div>
       </div>
@@ -783,11 +729,11 @@ export default function OptimizationModelEditor() {
                 >
                   <FileUp size={32} className="mx-auto text-slate-400 mb-3" />
                   <p className="text-sm font-medium text-slate-700 mb-1">点击或拖拽上传文件</p>
-                  <p className="text-xs text-slate-400">支持格式：.lp, .mps</p>
+                  <p className="text-xs text-slate-400">支持格式：.lp</p>
                   <input
                     id="file-input"
                     type="file"
-                    accept=".lp,.mps"
+                    accept=".lp"
                     onChange={handleFileSelect}
                     className="hidden"
                   />
@@ -916,6 +862,10 @@ export default function OptimizationModelEditor() {
             </div>
           </div>
         </div>
+      )}
+
+      {showMappingModal && (
+        <OntologyModelMappingModal />
       )}
 
       {showResult && (

@@ -8,8 +8,7 @@ from app.database.neo4j_client import neo4j_client
 import logging
 import json
 import re
-import highspy
-import numpy as np
+from ortools.linear_solver import pywraplp
 from datetime import datetime
 from simpleeval import simple_eval
 import requests as http_requests
@@ -277,90 +276,73 @@ class FlowEngine:
                     )
                     try:
                         col_indices = {v.name: i for i, v in enumerate(model.variables)}
-                        num_cols = len(model.variables)
-                        num_rows = len(model.constraints)
-                        
-                        lp = highspy.HighsLp()
-                        lp.num_col_ = num_cols
-                        lp.num_row_ = num_rows
-                        
-                        col_cost = [0.0] * num_cols
+
+                        solver = pywraplp.Solver.CreateSolver('SCIP')
+                        if not solver:
+                            solver = pywraplp.Solver.CreateSolver('CBC')
+                        if not solver:
+                            raise RuntimeError('无法创建 OR-Tools 求解器')
+
+                        # 创建变量
+                        vars_list = []
+                        for v in model.variables:
+                            lb = v.lower_bound if v.lower_bound is not None else 0.0
+                            ub = v.upper_bound if v.upper_bound else solver.infinity()
+                            if hasattr(v, 'is_integer') and v.is_integer:
+                                vars_list.append(solver.IntVar(lb, ub, v.name))
+                            else:
+                                vars_list.append(solver.NumVar(lb, ub, v.name))
+
+                        # 目标函数
+                        obj = solver.Objective()
                         for term in model.objective.expression.replace(' ', '').split('+'):
                             if term:
                                 if '*' in term:
                                     coeff, var = term.split('*')
-                                    col_cost[col_indices[var]] = float(coeff)
+                                    idx = col_indices.get(var)
+                                    if idx is not None:
+                                        obj.SetCoefficient(vars_list[idx], float(coeff))
                                 else:
-                                    col_cost[col_indices[term]] = 1.0
-                        lp.col_cost_ = np.array(col_cost, dtype=np.float64)
-                        
-                        lp.col_lower_ = np.array([v.lower_bound for v in model.variables], dtype=np.float64)
-                        lp.col_upper_ = np.array([v.upper_bound if v.upper_bound else float('inf') for v in model.variables], dtype=np.float64)
-                        
-                        row_lower = []
-                        row_upper = []
+                                    idx = col_indices.get(term)
+                                    if idx is not None:
+                                        obj.SetCoefficient(vars_list[idx], 1.0)
+
+                        if model.objective.sense == 'max':
+                            obj.SetMaximization()
+                        else:
+                            obj.SetMinimization()
+
+                        # 约束条件
                         for constraint in model.constraints:
                             if constraint.operator == '<=':
-                                row_lower.append(-float('inf'))
-                                row_upper.append(constraint.rhs)
+                                c = solver.Constraint(-solver.infinity(), constraint.rhs)
                             elif constraint.operator == '>=':
-                                row_lower.append(constraint.rhs)
-                                row_upper.append(float('inf'))
+                                c = solver.Constraint(constraint.rhs, solver.infinity())
                             elif constraint.operator == '==':
-                                row_lower.append(constraint.rhs)
-                                row_upper.append(constraint.rhs)
-                        lp.row_lower_ = np.array(row_lower, dtype=np.float64)
-                        lp.row_upper_ = np.array(row_upper, dtype=np.float64)
-                        
-                        if model.objective.sense == 'max':
-                            lp.sense_ = highspy.ObjSense.kMaximize
-                        else:
-                            lp.sense_ = highspy.ObjSense.kMinimize
-                        
-                        A_start = [0]
-                        A_index = []
-                        A_value = []
-                        for col_idx, var in enumerate(model.variables):
-                            col_name = var.name
-                            for row_idx, constraint in enumerate(model.constraints):
-                                expr = constraint.expression.replace(' ', '')
-                                terms = expr.split('+')
-                                for term in terms:
-                                    if term:
-                                        if '*' in term:
-                                            coeff_str, var_name = term.split('*')
-                                            coeff = float(coeff_str)
-                                        else:
-                                            coeff = 1.0
-                                            var_name = term
-                                        if var_name == col_name:
-                                            A_index.append(row_idx)
-                                            A_value.append(coeff)
-                            A_start.append(len(A_index))
-                        
-                        lp.a_matrix_.start_ = np.array(A_start, dtype=np.int32)
-                        lp.a_matrix_.index_ = np.array(A_index, dtype=np.int32)
-                        lp.a_matrix_.value_ = np.array(A_value, dtype=np.float64)
-                        
-                        if any(v.is_integer for v in model.variables):
-                            integrality = []
-                            for v in model.variables:
-                                if v.is_integer:
-                                    integrality.append(highspy.HighsVarType.kInteger)
-                                else:
-                                    integrality.append(highspy.HighsVarType.kContinuous)
-                            lp.integrality_ = integrality
-                        
-                        highs = highspy.Highs()
-                        highs.passModel(lp)
-                        highs.run()
-                        
-                        model_status = highs.getModelStatus()
-                        if model_status == highspy.HighsModelStatus.kOptimal:
-                            x = highs.getSolution().col_value
-                            solution = {v.name: float(x[col_indices[v.name]]) for v in model.variables}
+                                c = solver.Constraint(constraint.rhs, constraint.rhs)
+                            else:
+                                continue
+
+                            expr = constraint.expression.replace(' ', '')
+                            terms = expr.split('+')
+                            for term in terms:
+                                if term:
+                                    if '*' in term:
+                                        coeff_str, var_name = term.split('*')
+                                        coeff = float(coeff_str)
+                                    else:
+                                        coeff = 1.0
+                                        var_name = term
+                                    idx = col_indices.get(var_name)
+                                    if idx is not None:
+                                        c.SetCoefficient(vars_list[idx], coeff)
+
+                        # 求解
+                        status = solver.Solve()
+                        if status == pywraplp.Solver.OPTIMAL:
+                            solution = {v.name: vars_list[col_indices[v.name]].solution_value() for v in model.variables}
                             context['optimization_solution'] = solution
-                            context['objective_value'] = float(highs.getObjectiveValue())
+                            context['objective_value'] = solver.Objective().Value()
                             return {'step': len(context.keys()), 'node': node.data.get('label', '优化求解'),
                                     'status': 'success', 'input': f'modelId={model_id}', 'output': str(solution)}
                         else:

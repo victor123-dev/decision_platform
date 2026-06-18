@@ -67,13 +67,9 @@ const VAR_TYPE_LABEL = {
 
 /* ─── Card 1: 数学模型表达式 ─── */
 
-function MathExpressionCard({ variables, objective, constraints, problemType }) {
+function MathExpressionCard({ variables, objectives, constraints, problemType }) {
   const varNameMap = useMemo(() => buildVarNameMap(variables), [variables]);
-  const senseLabel = objective?.sense === 'maximize' ? 'max' : 'min';
-  const objExpr = useMemo(
-    () => formatExpression(objective?.coefficients, varNameMap),
-    [objective, varNameMap]
-  );
+  const objs = objectives || [];
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg overflow-hidden h-full flex flex-col">
@@ -90,13 +86,25 @@ function MathExpressionCard({ variables, objective, constraints, problemType }) 
 
       {/* 表达式区域 - 深色终端风格 */}
       <div className="bg-slate-900 text-green-400 font-mono text-xs leading-6 p-4 overflow-y-auto overflow-x-auto flex-1">
-        {/* 目标函数 */}
-        <div>
-          <span className="text-emerald-300">{senseLabel}</span>{' '}
-          <span className="text-yellow-400">z</span>{' '}
-          <span className="text-slate-400">=</span>{' '}
-          {objExpr || <span className="text-slate-500 italic">未定义</span>}
-        </div>
+        {/* 目标函数（支持多个） */}
+        {objs.map((obj, idx) => {
+          const senseLabel = obj?.sense === 'maximize' ? 'max' : 'min';
+          const objExpr = formatExpression(obj?.coefficients, varNameMap);
+          return (
+            <div key={obj.id || idx}>
+              <span className="text-emerald-300">{senseLabel}</span>{' '}
+              <span className="text-yellow-400">z{objs.length > 1 ? idx + 1 : ''}</span>{' '}
+              <span className="text-slate-400">=</span>{' '}
+              {objExpr || <span className="text-slate-500 italic">未定义</span>}
+              {obj.name && objs.length > 1 && (
+                <span className="text-slate-500 ml-2">// {obj.name}</span>
+              )}
+            </div>
+          );
+        })}
+        {objs.length === 0 && (
+          <div className="text-slate-500 italic">目标函数未定义</div>
+        )}
 
         {/* s.t. */}
         {(constraints || []).length > 0 && (
@@ -140,7 +148,7 @@ function MathExpressionCard({ variables, objective, constraints, problemType }) 
         )}
 
         {/* 空状态 */}
-        {(!objective?.coefficients || Object.keys(objective.coefficients).length === 0) &&
+        {(!objectives || objectives.length === 0 || objectives.every(o => !o.coefficients || Object.keys(o.coefficients).length === 0)) &&
           (!constraints || constraints.length === 0) && (
           <div className="text-slate-500 italic text-center py-4">
             暂无模型定义
@@ -216,7 +224,7 @@ function VariableMappingCard({ variables }) {
 
 /* ─── Card 3: 模型验证 ─── */
 
-function ValidationCard({ variables, objective, constraints }) {
+function ValidationCard({ variables, objectives, constraints }) {
   const varIdSet = useMemo(() => {
     const set = new Set();
     (variables || []).forEach(v => set.add(v.id));
@@ -225,8 +233,9 @@ function ValidationCard({ variables, objective, constraints }) {
 
   const checks = useMemo(() => {
     const hasVariables = (variables || []).length > 0;
-    const hasObjective = objective?.coefficients &&
-      Object.values(objective.coefficients).some(c => c !== 0);
+    const hasObjective = (objectives || []).some(o =>
+      o.coefficients && Object.values(o.coefficients).some(c => c !== 0)
+    );
     const hasConstraints = (constraints || []).length > 0;
 
     // 检查约束中引用的变量是否都已定义
@@ -245,11 +254,11 @@ function ValidationCard({ variables, objective, constraints }) {
 
     return [
       { label: '至少有1个决策变量', passed: hasVariables },
-      { label: '目标函数已定义（至少1个非零系数）', passed: !!hasObjective },
+      { label: `目标函数已定义（${(objectives || []).length}个，至少1个非零系数）`, passed: !!hasObjective },
       { label: '至少有1个约束条件', passed: hasConstraints },
       { label: '约束中引用的变量都已定义', passed: allVarsDefined },
     ];
-  }, [variables, objective, constraints, varIdSet]);
+  }, [variables, objectives, constraints, varIdSet]);
 
   const allPassed = checks.every(c => c.passed);
 
@@ -294,29 +303,26 @@ function ValidationCard({ variables, objective, constraints }) {
 /**
  * @param {Array} variables - 决策变量列表
  *   每项: { id, name, source, ontologyRef?, type, lowerBound, upperBound }
- * @param {object} objective - 目标函数 { sense: 'maximize'|'minimize', coefficients: { varId: number } }
+ * @param {Array} objectives - 目标函数列表 [{ id, name, sense, coefficients }]
  * @param {Array} constraints - 约束条件列表
  *   每项: { id, name, coefficients: { varId: number }, sense: '<='|'>='|'==', rhs: number }
  * @param {string} problemType - 'LP'|'MIP'|'IP'
  */
-export default function MathPreviewPanel({ variables, objective, constraints, problemType }) {
+export default function MathPreviewPanel({ variables, objectives, constraints, problemType }) {
   return (
     <div className="flex flex-col h-full p-3 bg-slate-50 gap-4">
-      {/* 数学模型卡片 - 占据剩余全部可用高度 */}
       <div className="flex-1 min-h-0">
         <MathExpressionCard
           variables={variables}
-          objective={objective}
+          objectives={objectives}
           constraints={constraints}
           problemType={problemType}
         />
       </div>
-      
-      {/* 验证状态卡片 - 固定在底部 */}
       <div className="flex-shrink-0">
         <ValidationCard
           variables={variables}
-          objective={objective}
+          objectives={objectives}
           constraints={constraints}
         />
       </div>

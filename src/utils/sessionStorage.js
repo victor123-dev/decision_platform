@@ -62,6 +62,22 @@ export function getConversationById(sessionId) {
   return conversations.find(c => c.id === sessionId);
 }
 
+export function appendToSession(sessionId, messages) {
+  if (!sessionId || !Array.isArray(messages) || messages.length === 0) {
+    return null;
+  }
+
+  const conversations = getConversations();
+  const index = conversations.findIndex(c => c.id === sessionId);
+  if (index < 0) return null;
+
+  const conversation = conversations[index];
+  conversation.messages = [...(conversation.messages || []), ...messages];
+  conversation.updatedAt = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+  return conversation;
+}
+
 export function getDefaultSession() {
   const conversations = getConversations();
   if (conversations.length > 0) {

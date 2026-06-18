@@ -58,10 +58,13 @@ export default function SessionList({ currentSessionId, onSelectSession, onNewSe
 
   return (
     <div 
-      className={`flex flex-col h-full transition-all duration-300 ease-in-out ${
-        isCollapsed ? 'w-12' : 'w-64'
-      } border-r`}
-      style={{ background: 'var(--surface-2)', borderColor: 'var(--border)' }}
+      className={`flex flex-col h-full transition-all duration-300 ease-in-out border-r`}
+      style={{ 
+        background: 'var(--surface-2)', 
+        borderColor: 'var(--border)',
+        flex: isCollapsed ? '0 0 48px' : '0 0 10%',
+        minWidth: isCollapsed ? 48 : 120,
+      }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-2 py-3 border-b" style={{ borderColor: 'var(--border)' }}>

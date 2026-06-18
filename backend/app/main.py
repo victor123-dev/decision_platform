@@ -48,6 +48,13 @@ def on_startup():
     from app.database import sqlite_models  # 确保所有模型都被导入
     Base.metadata.create_all(bind=engine)
 
+    # 自动初始化映射集预置数据
+    try:
+        from scripts.init_mapping_presets import init_presets
+        init_presets()
+    except Exception as e:
+        logger.warning(f"映射集预置数据初始化跳过: {e}")
+
 @app.get("/health", tags=["健康检查"])
 async def health_check():
     return {"status": "healthy", "service": "decision-platform-api"}
@@ -108,17 +115,19 @@ async def health_check_details():
 async def root():
     return {"message": "决策智能平台 API", "version": "1.0.0"}
 
-from app.routers import ontology, optimization, decision_flow, ai_modeling, rule_set, lookup_table
+from app.routers import ontology, optimization, decision_flow, ai_modeling, rule_set, lookup_table, mapping_sets
 app.include_router(ontology.router, prefix="/api/v1/ontology", tags=["本体模型"])
 app.include_router(optimization.router, prefix="/api/v1/optimization", tags=["优化求解模型"])
 app.include_router(decision_flow.router, prefix="/api/v1/flows", tags=["决策流程"])
 app.include_router(ai_modeling.router, prefix="/api/v1/ai", tags=["AI辅助建模"])
 app.include_router(rule_set.router, prefix="/api/v1/rulesets", tags=["规则集"])
 app.include_router(lookup_table.router, prefix="/api/v1/lookup-tables", tags=["查找表"])
+app.include_router(mapping_sets.router, prefix="/api/v1/mapping-sets", tags=["映射集合"])
 
-from app.routers import model, global_variable, code_file, dashboard, publish
+from app.routers import model, global_variable, code_file, dashboard, publish, optimization_dsl
 app.include_router(model.router, prefix="/api/v1/models", tags=["AI模型"])
 app.include_router(global_variable.router, prefix="/api/v1/variables", tags=["全局变量"])
 app.include_router(code_file.router, prefix="/api/v1/code-files", tags=["代码文件"])
 app.include_router(dashboard.router, prefix="/api/v1/dashboard", tags=["仪表板"])
 app.include_router(publish.router, prefix="/api/v1/publish", tags=["发布管理"])
+app.include_router(optimization_dsl.router, prefix="/api/v1/optimization-dsl", tags=["OO-DSL优化建模"])

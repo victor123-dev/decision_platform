@@ -43,7 +43,8 @@ async function request(method, path, body) {
     }
     
     if (!res.ok) {
-      const errorMsg = getErrorMessage(res.status, data?.detail || data?.message || data?.error);
+      const detail = data?.detail || data?.message || data?.error;
+      const errorMsg = typeof detail === 'string' ? detail : (typeof detail === 'object' ? JSON.stringify(detail) : getErrorMessage(res.status));
       const error = new Error(errorMsg);
       error.status = res.status;
       error.responseData = data;
@@ -167,6 +168,124 @@ async function callQwenAPIStream(messages, onChunk) {
   }
 }
 
+async function callStructuredChatStream(message, onEvent, resetConversation = false, context = null, controller = null) {
+  console.log('Structured Agent Stream Request:', message);
+
+  const internalController = controller || new AbortController();
+  const timeoutId = controller ? null : setTimeout(() => internalController.abort(), 180000);
+
+  try {
+    const body = { message, reset_conversation: resetConversation };
+    if (context) {
+      body.context = context;
+    }
+    const response = await fetch('/api/v1/ai/chat/structured', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      signal: internalController.signal,
+      body: JSON.stringify(body),
+    });
+    if (timeoutId) clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 200)}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+        const payload = trimmed.slice(6);
+        if (payload === '[DONE]') return;
+
+        try {
+          const event = JSON.parse(payload);
+          if (onEvent) onEvent(event.event, event.payload);
+        } catch (e) { /* skip malformed */ }
+      }
+    }
+  } catch (error) {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('请求超时，请稍后重试');
+    }
+    if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+      throw new Error('网络连接失败，请检查网络设置');
+    }
+    throw error;
+  }
+}
+
+async function callConfirmGenerateDslStream(draft, userModified = false, onEvent, controller = null) {
+  console.log('Confirm Generate DSL Stream Request:', draft?.name || 'model draft');
+
+  const internalController = controller || new AbortController();
+  const timeoutId = controller ? null : setTimeout(() => internalController.abort(), 180000);
+
+  try {
+    const response = await fetch('/api/v1/ai/chat/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      signal: internalController.signal,
+      body: JSON.stringify({ draft, user_modified: userModified }),
+    });
+    if (timeoutId) clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 200)}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+        const payload = trimmed.slice(6);
+        if (payload === '[DONE]') return;
+
+        try {
+          const event = JSON.parse(payload);
+          if (onEvent) onEvent(event.event, event.payload);
+        } catch (e) { /* skip malformed */ }
+      }
+    }
+  } catch (error) {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('请求超时，请稍后重试');
+    }
+    if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+      throw new Error('网络连接失败，请检查网络设置');
+    }
+    throw error;
+  }
+}
+
 export const api = {
   get: (path) => request('GET', path),
   post: (path, body) => request('POST', path, body),
@@ -175,6 +294,8 @@ export const api = {
   qwen: {
     chat: callQwenAPI,
     chatStream: callQwenAPIStream,
+    chatStructuredStream: callStructuredChatStream,
+    confirmGenerateDslStream: callConfirmGenerateDslStream,
   },
 };
 

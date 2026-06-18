@@ -3,8 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-import highspy
-import numpy as np
+from ortools.linear_solver import pywraplp
 import logging
 import json
 import re
@@ -33,7 +32,8 @@ router = APIRouter()
 
 class OptimizationVariable(BaseModel):
     id: str = Field(description="变量唯一标识")
-    name: str = Field(description="变量名称")
+    name: str = Field(description="变量中文名称")
+    nameEn: Optional[str] = Field(None, description="变量英文名称")
     type: str = Field("continuous", description="变量类型", pattern="^(continuous|integer|binary)$")
     lower_bound: float = Field(0.0, description="下界")
     upper_bound: Optional[float] = Field(None, description="上界")
@@ -283,7 +283,7 @@ def parse_expression(expression, var_indices):
     logger.debug(f"Final coefficients: {coeffs}")
     return coeffs
 
-# --- Solve Endpoint ---
+# --- Solve Endpoint (OR-Tools) ---
 
 @router.post("/{model_id}/solve", response_model=OptimizationResult, tags=["优化求解模型"])
 async def solve_model(model_id: str, db: Session = Depends(get_db)):
@@ -294,110 +294,79 @@ async def solve_model(model_id: str, db: Session = Depends(get_db)):
     model = db_to_api(db_model)
 
     try:
+        import time
+        start_time = time.time()
+
         var_indices = {v.name: i for i, v in enumerate(model.variables)}
-        num_cols = len(model.variables)
-        num_rows = len(model.constraints)
 
-        # 创建HighsLp对象
-        lp = highspy.HighsLp()
-        lp.num_col_ = num_cols
-        lp.num_row_ = num_rows
+        # 创建 OR-Tools 求解器
+        solver = pywraplp.Solver.CreateSolver('SCIP')
+        if not solver:
+            solver = pywraplp.Solver.CreateSolver('CBC')
+        if not solver:
+            raise RuntimeError('无法创建 OR-Tools 求解器 (SCIP/CBC)')
 
-        # 设置目标函数系数
-        col_cost = np.array([0.0] * num_cols, dtype=np.float64)
+        # 创建变量
+        vars_list = []
+        for v in model.variables:
+            lb = v.lower_bound if v.lower_bound is not None else 0.0
+            ub = v.upper_bound if v.upper_bound is not None else solver.infinity()
+            if v.type == 'binary':
+                var = solver.IntVar(0, 1, v.name)
+            elif v.type == 'integer':
+                var = solver.IntVar(lb, ub, v.name)
+            else:
+                var = solver.NumVar(lb, ub, v.name)
+            vars_list.append(var)
+
+        # 目标函数
+        obj = solver.Objective()
         obj_coeffs = parse_expression(model.objective.expression, var_indices)
         for idx, coeff in obj_coeffs.items():
-            col_cost[idx] = coeff
-        lp.col_cost_ = col_cost
+            if coeff != 0:
+                obj.SetCoefficient(vars_list[idx], coeff)
 
-        # 设置变量边界
-        lp.col_lower_ = np.array([v.lower_bound for v in model.variables], dtype=np.float64)
-        lp.col_upper_ = np.array([v.upper_bound if v.upper_bound else float('inf') for v in model.variables], dtype=np.float64)
-
-        # 设置约束边界
-        row_lower = []
-        row_upper = []
-        for constraint in model.constraints:
-            if constraint.sense == '<=':
-                row_lower.append(-float('inf'))
-                row_upper.append(constraint.rhs)
-            elif constraint.sense == '>=':
-                row_lower.append(constraint.rhs)
-                row_upper.append(float('inf'))
-            elif constraint.sense == '==':
-                row_lower.append(constraint.rhs)
-                row_upper.append(constraint.rhs)
-        lp.row_lower_ = np.array(row_lower, dtype=np.float64)
-        lp.row_upper_ = np.array(row_upper, dtype=np.float64)
-
-        # 设置目标方向
         if model.objective.sense == 'maximize':
-            lp.sense_ = highspy.ObjSense.kMaximize
+            obj.SetMaximization()
         else:
-            lp.sense_ = highspy.ObjSense.kMinimize
+            obj.SetMinimization()
 
-        # 设置约束矩阵（列主序稀疏格式）
-        A_start = [0]
-        A_index = []
-        A_value = []
-
-        # 预先解析所有约束的系数
-        constraint_coeffs = []
+        # 约束条件
         for constraint in model.constraints:
-            coeffs = parse_expression(constraint.expression, var_indices)
-            constraint_coeffs.append(coeffs)
+            c_coeffs = parse_expression(constraint.expression, var_indices)
+            if constraint.sense == '<=':
+                c = solver.Constraint(-solver.infinity(), constraint.rhs)
+            elif constraint.sense == '>=':
+                c = solver.Constraint(constraint.rhs, solver.infinity())
+            else:  # ==
+                c = solver.Constraint(constraint.rhs, constraint.rhs)
 
-        # 按列构建稀疏矩阵
-        for col_idx in range(num_cols):
-            for row_idx in range(num_rows):
-                coeff = constraint_coeffs[row_idx][col_idx]
+            for idx, coeff in c_coeffs.items():
                 if coeff != 0:
-                    A_index.append(row_idx)
-                    A_value.append(coeff)
-            A_start.append(len(A_index))
-
-        lp.a_matrix_.start_ = np.array(A_start, dtype=np.int32)
-        lp.a_matrix_.index_ = np.array(A_index, dtype=np.int32)
-        lp.a_matrix_.value_ = np.array(A_value, dtype=np.float64)
-
-        # 设置整数变量
-        if any(v.type in ("integer", "binary") for v in model.variables):
-            integrality = []
-            for v in model.variables:
-                if v.type in ("integer", "binary"):
-                    integrality.append(highspy.HighsVarType.kInteger)
-                else:
-                    integrality.append(highspy.HighsVarType.kContinuous)
-            lp.integrality_ = integrality
-
-        # 创建求解器并传递模型
-        highs = highspy.Highs()
-        pass_result = highs.passModel(lp)
-
-        if pass_result != highspy.HighsStatus.kOk:
-            raise RuntimeError(f"Failed to pass model to solver: {pass_result}")
+                    c.SetCoefficient(vars_list[idx], coeff)
 
         # 求解
-        highs.run()
-
-        # 获取结果
-        model_status = highs.getModelStatus()
+        status = solver.Solve()
 
         status_map = {
-            highspy.HighsModelStatus.kOptimal: "optimal",
-            highspy.HighsModelStatus.kInfeasible: "infeasible",
-            highspy.HighsModelStatus.kUnbounded: "unbounded",
-            highspy.HighsModelStatus.kInterrupt: "interrupted",
-            highspy.HighsModelStatus.kHighsInterrupt: "interrupted",
+            pywraplp.Solver.OPTIMAL: "optimal",
+            pywraplp.Solver.INFEASIBLE: "infeasible",
+            pywraplp.Solver.UNBOUNDED: "unbounded",
+            pywraplp.Solver.NOT_SOLVED: "unknown",
+            pywraplp.Solver.FEASIBLE: "feasible",
         }
 
         solution = {}
         objective_value = None
-        if model_status == highspy.HighsModelStatus.kOptimal:
-            x = highs.getSolution().col_value
+        solve_status = status_map.get(status, "unknown")
+
+        if status == pywraplp.Solver.OPTIMAL:
             for v in model.variables:
-                solution[v.name] = float(x[var_indices[v.name]])
-            objective_value = float(highs.getObjectiveValue())
+                idx = var_indices[v.name]
+                solution[v.name] = vars_list[idx].solution_value()
+            objective_value = solver.Objective().Value()
+
+        solve_time = time.time() - start_time
 
         # 更新模型状态为solved
         db_model.status = "solved"
@@ -406,10 +375,10 @@ async def solve_model(model_id: str, db: Session = Depends(get_db)):
 
         return OptimizationResult(
             model_id=model_id,
-            status=status_map.get(model_status, "unknown"),
+            status=solve_status,
             objective_value=objective_value,
             solution=solution,
-            solve_time=float(highs.getRunTime()),
+            solve_time=solve_time,
             iterations=0
         )
 
@@ -418,70 +387,159 @@ async def solve_model(model_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- MPS/LP Direct Solve Endpoint ---
+# --- LP Direct Solve Endpoint ---
 
-@router.post("/solve-mps", tags=["优化求解模型"])
-async def solve_mps_content(body: dict):
-    """直接接收 MPS/LP 文件内容，使用 HiGHS 原生读取器求解"""
+@router.post("/solve-lp", tags=["优化求解模型"])
+async def solve_lp_content(body: dict):
+    """接收 LP 文件内容，解析并使用 OR-Tools 求解"""
+    from app.services.file_parser import parse_model_file
+    import time
+
     content = body.get("content", "")
-    file_format = body.get("format", "mps")
+    file_format = body.get("format", "lp")
 
     if not content:
         raise HTTPException(status_code=400, detail="缺少模型文件内容")
 
-    import tempfile
-    import os
-
-    suffix = f".{file_format}"
-    tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
-            f.write(content)
-            tmp_path = f.name
+        start_time = time.time()
 
-        highs = highspy.Highs()
-        highs.setOptionValue("output_flag", False)
-        read_status = highs.readModel(tmp_path)
-        if read_status != highspy.HighsStatus.kOk:
-            raise HTTPException(status_code=400, detail="无法解析模型文件")
+        # 解析 LP 文件
+        parsed = parse_model_file(content, file_format)
 
-        highs.run()
-        model_status = highs.getModelStatus()
+        # 创建 OR-Tools 求解器
+        solver = pywraplp.Solver.CreateSolver('SCIP')
+        if not solver:
+            solver = pywraplp.Solver.CreateSolver('CBC')
+        if not solver:
+            raise RuntimeError('无法创建 OR-Tools 求解器')
+
+        # 创建变量
+        var_map = {}
+        for v in parsed["variables"]:
+            name = v["name"]
+            lb = v.get("lowerBound") if v.get("lowerBound") is not None else 0.0
+            ub = v.get("upperBound") if v.get("upperBound") is not None else solver.infinity()
+            if v["type"] == "binary":
+                var_map[name] = solver.IntVar(0, 1, name)
+            elif v["type"] == "integer":
+                var_map[name] = solver.IntVar(lb, ub, name)
+            else:
+                var_map[name] = solver.NumVar(lb, ub, name)
+
+        # 目标函数
+        obj = solver.Objective()
+        for var_name, coeff in parsed.get("objective", {}).get("coefficients", {}).items():
+            if var_name in var_map and coeff != 0:
+                obj.SetCoefficient(var_map[var_name], coeff)
+
+        sense = parsed.get("objectiveSense", "minimize")
+        if sense == "maximize":
+            obj.SetMaximization()
+        else:
+            obj.SetMinimization()
+
+        # 约束条件
+        for c in parsed.get("constraints", []):
+            if c["sense"] == "<=":
+                constraint = solver.Constraint(-solver.infinity(), c["rhs"])
+            elif c["sense"] == ">=":
+                constraint = solver.Constraint(c["rhs"], solver.infinity())
+            else:
+                constraint = solver.Constraint(c["rhs"], c["rhs"])
+
+            for var_name, coeff in c.get("coefficients", {}).items():
+                if var_name in var_map and coeff != 0:
+                    constraint.SetCoefficient(var_map[var_name], coeff)
+
+        # 求解
+        status = solver.Solve()
 
         status_map = {
-            highspy.HighsModelStatus.kOptimal: "optimal",
-            highspy.HighsModelStatus.kInfeasible: "infeasible",
-            highspy.HighsModelStatus.kUnbounded: "unbounded",
+            pywraplp.Solver.OPTIMAL: "optimal",
+            pywraplp.Solver.INFEASIBLE: "infeasible",
+            pywraplp.Solver.UNBOUNDED: "unbounded",
         }
 
         solution = {}
         objective_value = None
-        if model_status == highspy.HighsModelStatus.kOptimal:
-            sol = highs.getSolution()
-            num_cols = highs.getNumCol()
-            for i in range(num_cols):
-                # HiGHS getColName 返回 (status, name) 元组
-                try:
-                    col_info = highs.getColName(i)
-                    col_name = col_info[1] if isinstance(col_info, tuple) else str(col_info)
-                except Exception:
-                    col_name = f"x{i}"
-                solution[col_name] = float(sol.col_value[i])
-            objective_value = float(highs.getObjectiveValue())
+        if status == pywraplp.Solver.OPTIMAL:
+            for name, var in var_map.items():
+                solution[name] = var.solution_value()
+            objective_value = solver.Objective().Value()
+
+        solve_time = time.time() - start_time
 
         return {
-            "model_id": "mps-direct",
-            "status": status_map.get(model_status, "unknown"),
+            "model_id": "lp-direct",
+            "status": status_map.get(status, "unknown"),
             "objective_value": objective_value,
             "solution": solution,
-            "solve_time": float(highs.getRunTime()),
+            "solve_time": solve_time,
             "iterations": 0,
         }
-    except HTTPException:
-        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error solving MPS content: {e}")
+        logger.error(f"Error solving LP content: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+
+
+# ─── New Endpoints: parse-file / generate-python / generate-dsl ─────────────
+
+@router.post("/parse-file", tags=["优化求解模型"])
+async def parse_model_file(body: dict):
+    """
+    解析 LP 文件内容，返回完整模型结构。
+    body: { content: str, format: 'lp' }
+    """
+    from app.services.file_parser import parse_model_file
+
+    content = body.get("content", "")
+    file_format = body.get("format", "lp")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="缺少模型文件内容")
+
+    try:
+        result = parse_model_file(content, file_format)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error parsing model file: {e}")
+        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
+
+
+@router.post("/generate-python", tags=["优化求解模型"])
+async def generate_python_code(body: dict):
+    """
+    将模型定义转换为 OR-Tools Python 代码。
+    body: { variables: [...], objective: {...}, constraints: [...], name: str }
+    """
+    from app.services.code_generator import generate_ortools_code
+
+    try:
+        code = generate_ortools_code(body)
+        return {"code": code}
+    except Exception as e:
+        logger.error(f"Error generating Python code: {e}")
+        raise HTTPException(status_code=500, detail=f"代码生成失败: {str(e)}")
+
+
+@router.post("/generate-dsl", tags=["优化求解模型"])
+async def generate_or_dsl(body: dict):
+    """
+    将模型定义转换为 OR-DSL JSON 结构。
+    body: { variables: [...], objective: {...}, constraints: [...], name: str,
+            problem_type: str, ontologies: [...] }
+    """
+    from app.services.dsl_converter import model_to_or_dsl
+
+    try:
+        ontologies = body.pop("ontologies", None) or []
+        or_dsl = model_to_or_dsl(body, ontologies)
+        return {"orDsl": or_dsl}
+    except Exception as e:
+        logger.error(f"Error generating OR-DSL: {e}")
+        raise HTTPException(status_code=500, detail=f"DSL生成失败: {str(e)}")

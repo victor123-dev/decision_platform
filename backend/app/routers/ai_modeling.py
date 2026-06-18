@@ -7,6 +7,7 @@ import logging
 from config.settings import settings
 from app.deerflow import get_agent, initialize_agent, reset_agent
 from app.deerflow.agent import OptimizationTools
+from app.routers.ontology import list_ontologies
 
 
 def _generate_fallback_model(full_description: str, model_type: str) -> Dict[str, Any]:
@@ -89,6 +90,17 @@ class AgentChatRequest(BaseModel):
     message: str = Field(description="用户消息")
     reset_conversation: bool = Field(default=False, description="是否重置对话")
 
+class AgentStructuredChatRequest(BaseModel):
+    message: str = Field(description="用户消息")
+    reset_conversation: bool = Field(default=False, description="是否重置对话")
+    ontology_id: Optional[str] = Field(default=None, description="指定本体ID，不指定则使用第一个可用本体")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="对话上下文，用于多轮补充信息")
+
+class AgentConfirmChatRequest(BaseModel):
+    draft: Dict[str, Any] = Field(description="用户确认的模型草案")
+    ontology_id: Optional[str] = Field(default=None, description="指定本体ID，不指定则使用第一个可用本体")
+    user_modified: bool = Field(default=False, description="用户是否手动调整过草案")
+
 class AgentChatResponse(BaseModel):
     success: bool = Field(description="是否成功")
     response: str = Field(description="Agent响应")
@@ -150,6 +162,81 @@ async def agent_chat_stream(request: AgentChatRequest):
         )
     except Exception as e:
         logger.error(f"Agent chat stream error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/structured", tags=["AI辅助建模 - DeerFlow"])
+async def agent_chat_structured_stream(request: AgentStructuredChatRequest):
+    """
+    DeerFlow Agent结构化流式对话接口（步骤 1-5）。
+    返回 SSE 事件：step_start / step_content / step_end / model_draft / done / error
+    """
+    try:
+        agent = get_agent()
+
+        if request.reset_conversation:
+            reset_agent()
+            agent = get_agent()
+
+        # 获取本体数据（用于业务实体识别和OR-DSL生成）
+        ontologies = []
+        try:
+            all_ontologies = await list_ontologies()
+            if request.ontology_id:
+                ontologies = [o for o in all_ontologies if o.get("id") == request.ontology_id]
+            if not ontologies and all_ontologies:
+                ontologies = [all_ontologies[0]]
+        except Exception as e:
+            logger.warning(f"Failed to load ontology context for structured chat: {e}")
+            ontologies = []
+
+        return StreamingResponse(
+            agent.invoke_structured_stream(request.message, ontologies=ontologies, context=request.context),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Agent structured chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/confirm", tags=["AI辅助建模 - DeerFlow"])
+async def agent_chat_confirm_stream(request: AgentConfirmChatRequest):
+    """
+    DeerFlow Agent结构化确认接口（步骤 6）。
+    用户确认模型草案后，流式生成 OR-DSL 并回填。
+    返回 SSE 事件：step_start / step_content / step_end / or_dsl / done / error
+    """
+    try:
+        agent = get_agent()
+
+        # 获取本体数据用于 OR-DSL 生成
+        ontologies = []
+        try:
+            all_ontologies = await list_ontologies()
+            if request.ontology_id:
+                ontologies = [o for o in all_ontologies if o.get("id") == request.ontology_id]
+            if not ontologies and all_ontologies:
+                ontologies = [all_ontologies[0]]
+        except Exception as e:
+            logger.warning(f"Failed to load ontology context for confirm chat: {e}")
+            ontologies = []
+
+        return StreamingResponse(
+            agent.invoke_generate_dsl_stream(request.draft, ontologies=ontologies),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Agent confirm chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

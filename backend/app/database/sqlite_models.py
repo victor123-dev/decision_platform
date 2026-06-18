@@ -157,3 +157,34 @@ class PublishHistoryDB(Base):
     user = Column(String)
     time = Column(String)
     status = Column(String)
+
+
+class OptimizationDslModelDB(Base):
+    __tablename__ = "optimization_dsl_models"
+    id = Column(String, primary_key=True)
+    workspace_id = Column(String, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    problem_type = Column(String, default="MIP")
+    status = Column(String, default="draft", index=True)
+    ontology_id = Column(String, nullable=False, index=True)
+    business_problem = Column(Text)
+    dsl_version = Column(String, default="0.1")
+    dsl_json = Column(Text, nullable=False)
+    compiled_json = Column(Text)
+    validation_json = Column(Text)
+    solve_result_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class OntologyRelationInstance(Base):
+    __tablename__ = "ontology_relation_instances"
+    id = Column(String, primary_key=True)
+    ontology_id = Column(String, nullable=False, index=True)
+    relation_type_id = Column(String, nullable=False, index=True)
+    source_instance_id = Column(String, nullable=False, index=True)
+    target_instance_id = Column(String, nullable=False, index=True)
+    properties = Column(Text)  # JSON, e.g. {"duration": 3.5}
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
