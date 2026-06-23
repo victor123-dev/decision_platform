@@ -130,6 +130,18 @@ export default function SolveResultPanel({ result, onClose, onApply }) {
     });
   }, [result, isOptimal]);
 
+  /* ── 计算最大维度 maxDim ── */
+  const maxDim = useMemo(() => {
+    if (!result.variables) return 0;
+    let max = 0;
+    result.variables.forEach(v => {
+      const d = v.dimension || '0D';
+      const num = parseInt(d) || 0;
+      if (num > max) max = num;
+    });
+    return Math.min(max, 3); // 最多支持3维
+  }, [result.variables]);
+
   /* ── 变量列表（含元信息） ── */
   const variableList = useMemo(() => {
     if (!result.solution) return [];
@@ -142,12 +154,15 @@ export default function SolveResultPanel({ result, onClose, onApply }) {
     });
     return Object.entries(result.solution).map(([key, value]) => {
       const varInfo = varByCn[key] || varByEn[key] || {};
+      const rawValue = typeof value === 'number' ? value : parseFloat(value);
       return {
         name: varInfo.name || key,           // 中文名称
         nameEn: varInfo.nameEn || '',         // 英文名称
-        value: typeof value === 'number' ? value : parseFloat(value),
+        value: rawValue,
         type: varInfo.type || 'continuous',
-        isZero: Math.abs(typeof value === 'number' ? value : parseFloat(value)) < 0.00001,
+        isZero: Math.abs(rawValue) < 0.00001,
+        dimension: varInfo.dimension || '0D',  // 新增：维度信息
+        indices: varInfo.indices || [],         // 新增：索引定义
       };
     });
   }, [result]);
@@ -359,6 +374,16 @@ export default function SolveResultPanel({ result, onClose, onApply }) {
                             英文名称 <SortIcon field="nameEn" sortBy={sortBy} sortDir={sortDir} />
                           </span>
                         </th>
+                        {/* 动态索引列 */}
+                        {maxDim >= 1 && (
+                          <th className="px-2 py-2 text-center text-[11px] font-medium text-purple-500 w-[80px]">索引i</th>
+                        )}
+                        {maxDim >= 2 && (
+                          <th className="px-2 py-2 text-center text-[11px] font-medium text-purple-500 w-[80px]">索引j</th>
+                        )}
+                        {maxDim >= 3 && (
+                          <th className="px-2 py-2 text-center text-[11px] font-medium text-purple-500 w-[80px]">索引k</th>
+                        )}
                         <th className="px-3 py-2 text-right text-[11px] font-medium text-gray-500 cursor-pointer select-none group hover:text-gray-700 w-[112px]"
                           onClick={() => handleSort('value')}>
                           <span className="inline-flex items-center gap-1">
@@ -370,32 +395,63 @@ export default function SolveResultPanel({ result, onClose, onApply }) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {filteredVars.length > 0 ? filteredVars.map((v, index) => (
-                        <tr key={v.nameEn || v.name}
-                          className={`group transition-colors hover:bg-blue-50/60 ${v.isZero ? 'bg-gray-50/40 text-gray-400' : 'text-gray-700'}`}>
-                          <td className="px-2 py-1.5 text-center text-gray-400 text-[11px] font-mono tabular-nums">{index + 1}</td>
-                          <td className={`px-3 py-1.5 text-[11px] truncate ${v.isZero ? 'text-gray-400' : 'text-gray-700 font-medium'}`}
-                            title={v.name}>
-                            {v.name}
-                          </td>
-                          <td className={`px-3 py-1.5 font-mono text-[11px] ${v.isZero ? 'text-gray-400' : 'text-gray-700'}`}>
-                            <span className="truncate block w-full" title={v.nameEn}>{v.nameEn || '—'}</span>
-                          </td>
-                          <td className={`px-3 py-1.5 text-right font-mono text-[11px] font-semibold tabular-nums ${v.isZero ? 'text-gray-400' : 'text-amber-700'}`}>
-                            {v.value.toFixed(4)}
-                          </td>
-                          <td className="px-2 py-1.5 text-center">
-                            <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 ${v.type === 'integer' ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-100 text-gray-500'}`}>
-                              {v.type === 'integer' ? '整数' : '连续'}
-                            </span>
-                          </td>
-                          <td className="px-2 py-1.5 text-center">
-                            <InlineCopy text={v.value.toFixed(4)} />
-                          </td>
-                        </tr>
-                      )) : (
+                      {filteredVars.length > 0 ? filteredVars.map((v, index) => {
+                        // 解析维度数字
+                        const dimNum = parseInt(v.dimension) || 0;
+                        // 索引列显示内容生成器
+                        const getIndexCell = (colIdx) => {
+                          if (dimNum <= colIdx) return '—';
+                          const idxDef = v.indices?.[colIdx];
+                          if (!idxDef) return '—';
+                          const alias = idxDef.alias || idxDef.nameEn || '';
+                          const meaning = idxDef.businessMeaning || idxDef.name || '';
+                          return alias
+                            ? `${alias}${meaning ? ': ' + meaning : ''}`
+                            : (meaning || '—');
+                        };
+                        return (
+                          <tr key={v.nameEn || v.name}
+                            className={`group transition-colors hover:bg-blue-50/60 ${v.isZero ? 'bg-gray-50/40 text-gray-400' : 'text-gray-700'}`}>
+                            <td className="px-2 py-1.5 text-center text-gray-400 text-[11px] font-mono tabular-nums">{index + 1}</td>
+                            <td className={`px-3 py-1.5 text-[11px] truncate ${v.isZero ? 'text-gray-400' : 'text-gray-700 font-medium'}`}
+                              title={v.name}>
+                              {v.name}
+                            </td>
+                            <td className={`px-3 py-1.5 font-mono text-[11px] ${v.isZero ? 'text-gray-400' : 'text-gray-700'}`}>
+                              <span className="truncate block w-full" title={v.nameEn}>{v.nameEn || '—'}</span>
+                            </td>
+                            {/* 动态索引列内容 */}
+                            {maxDim >= 1 && (
+                              <td className="px-2 py-1.5 text-center text-[10px] font-mono text-purple-600 truncate" title={getIndexCell(0)}>
+                                {getIndexCell(0)}
+                              </td>
+                            )}
+                            {maxDim >= 2 && (
+                              <td className="px-2 py-1.5 text-center text-[10px] font-mono text-purple-600 truncate" title={getIndexCell(1)}>
+                                {getIndexCell(1)}
+                              </td>
+                            )}
+                            {maxDim >= 3 && (
+                              <td className="px-2 py-1.5 text-center text-[10px] font-mono text-purple-600 truncate" title={getIndexCell(2)}>
+                                {getIndexCell(2)}
+                              </td>
+                            )}
+                            <td className={`px-3 py-1.5 text-right font-mono text-[11px] font-semibold tabular-nums ${v.isZero ? 'text-gray-400' : 'text-amber-700'}`}>
+                              {v.value.toFixed(4)}
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 ${v.type === 'integer' ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-100 text-gray-500'}`}>
+                                {v.type === 'integer' ? '整数' : '连续'}
+                              </span>
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              <InlineCopy text={v.value.toFixed(4)} />
+                            </td>
+                          </tr>
+                        );
+                      }) : (
                         <tr>
-                          <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
+                          <td colSpan={6 + maxDim} className="px-4 py-12 text-center text-gray-400">
                             <Search size={20} className="mx-auto mb-2 opacity-50" />
                             <p className="text-xs">未找到匹配的变量</p>
                           </td>

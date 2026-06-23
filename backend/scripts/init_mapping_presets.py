@@ -7,8 +7,12 @@
 约束条件集：按业务场景分组，变量名与决策变量集完全匹配
 
 变量性质：
-  - direct_ref（直引变量）：格式"本体模型.对象.属性"，直接引用单个本体属性
-  - association（关联变量）：多维变量X[i,j]，展示关联对象信息和关联关系
+  - association（关联变量）：所有维度变量统一使用association性质
+    - 0D: 无索引的聚合变量（如Makespan、总成本）
+    - 1D: 单索引变量X[i]，索引符号统一用i
+    - 2D: 双索引变量X[i,j]，索引符号统一用i,j
+    - 3D: 三索引变量X[i,j,k]，索引符号统一用i,j,k
+  - 直引变量：name/nameEn与引用对象属性一致，通过directRef字段标注引用属性
 
 运行方式：
   cd backend
@@ -54,18 +58,18 @@ def _direct_ref(object_type_id: str, property_id: str, display_name: str) -> dic
     return {"objectTypeId": object_type_id, "propertyId": property_id, "displayName": display_name}
 
 
-def _idx(alias: str, object_type_id: str, property_id: str, set_name: str, role: str = "") -> dict:
+def _idx(alias: str, object_type_id: str, property_id: str, set_name: str, role: str = "", business_meaning: str = "") -> dict:
     return {"alias": alias, "objectTypeId": object_type_id, "propertyId": property_id,
-            "setName": set_name, "role": role}
+            "setName": set_name, "role": role, "businessMeaning": business_meaning}
 
 
 def _ont_ref(object_type_id: str, property_id: str) -> dict:
     return {"objectTypeId": object_type_id, "propertyId": property_id, "ontologyName": ONTOLOGY_NAME}
 
 
-def _var_index(alias: str, set_name: str, object_type_id: str, display_name: str) -> dict:
+def _var_index(alias: str, set_name: str, object_type_id: str, display_name: str, business_meaning: str = "") -> dict:
     return {"alias": alias, "setName": set_name, "objectTypeId": object_type_id,
-            "objectTypeDisplayName": display_name}
+            "objectTypeDisplayName": display_name, "businessMeaning": business_meaning}
 
 
 def _assoc_prop(object_type_id: str, display_name: str, properties: list) -> dict:
@@ -77,13 +81,14 @@ def _assoc_prop(object_type_id: str, display_name: str, properties: list) -> dic
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 预置决策变量集 —— 按业务场景分组（标准字典）
-# nature: "direct_ref" = 直引变量 | "association" = 关联变量
+# nature: 统一使用 "association"；直引变量通过 directRef 字段标注引用属性
+# 索引符号: 1D→i, 2D→i,j, 3D→i,j,k；businessMeaning标注索引业务涵义
 # ─────────────────────────────────────────────────────────────────────────────
 
 PRESET_VARIABLE_SETS = [
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 场景1: APS高级计划排程
+    # 场景1: APS高级计划排程（0D~3D全覆盖）
     # 业务目标：将工单分配到机台，确定加工顺序和时间，最小化makespan和延期
     # ══════════════════════════════════════════════════════════════════════════
     {
@@ -103,16 +108,16 @@ PRESET_VARIABLE_SETS = [
                 "dimension": "2D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("i", "工单集合", "obj-work-order", "工单"),
-                    _var_index("j", "机台集合", "obj-machine", "机台"),
+                    _var_index("i", "工单集合", "obj-work-order", "工单", "工单编号"),
+                    _var_index("j", "机台集合", "obj-machine", "机台", "机台编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-work-order", "work_order_id"),
                     _ont_ref("obj-machine", "machine_id"),
                 ],
                 "indexMapping": [
-                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "被分配对象"),
-                    _idx("j", "obj-machine", "machine_id", "机台集合", "执行资源"),
+                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "被分配对象", "工单编号"),
+                    _idx("j", "obj-machine", "machine_id", "机台集合", "执行资源", "机台编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
                 "businessMeaning": "工单i是否分配给机台j加工",
@@ -127,20 +132,22 @@ PRESET_VARIABLE_SETS = [
                 "symbol": "S_开始时间",
                 "name": "工单开始时间",
                 "nameEn": "work_order_start_time",
-                "nature": "direct_ref",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("i", "工单集合", "obj-work-order", "工单"),
+                    _var_index("i", "工单集合", "obj-work-order", "工单", "工单编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-work-order", "status")],
-                "directRef": _direct_ref("obj-work-order", "status", "工单.状态(排程时间)"),
+                "ontologyRefs": [_ont_ref("obj-work-order", "work_order_id")],
                 "indexMapping": [
-                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "排程对象"),
+                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "排程对象", "工单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
                 "businessMeaning": "工单i的开始加工时间",
                 "unit": "小时",
+                "associatedProperties": [
+                    _assoc_prop("obj-work-order", "工单", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "planned_quantity", "displayName": "计划数量"}]),
+                ],
             },
             {
                 "id": "dv-aps-c-completion",
@@ -151,11 +158,11 @@ PRESET_VARIABLE_SETS = [
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("i", "工单集合", "obj-work-order", "工单"),
+                    _var_index("i", "工单集合", "obj-work-order", "工单", "工单编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-work-order", "work_order_id")],
                 "indexMapping": [
-                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "排程对象"),
+                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "排程对象", "工单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
                 "businessMeaning": "工单i的完工时间",
@@ -173,22 +180,22 @@ PRESET_VARIABLE_SETS = [
                 "dimension": "3D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("i", "工单集合", "obj-work-order", "工单"),
-                    _var_index("k", "工单集合", "obj-work-order", "工单"),
-                    _var_index("j", "机台集合", "obj-machine", "机台"),
+                    _var_index("i", "工单集合", "obj-work-order", "工单", "工单编号(前序)"),
+                    _var_index("j", "工单集合", "obj-work-order", "工单", "工单编号(后序)"),
+                    _var_index("k", "机台集合", "obj-machine", "机台", "机台编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-work-order", "work_order_id"),
                     _ont_ref("obj-machine", "machine_id"),
                 ],
                 "indexMapping": [
-                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "前序工单"),
-                    _idx("k", "obj-work-order", "work_order_id", "工单集合", "后序工单"),
-                    _idx("j", "obj-machine", "machine_id", "机台集合", "执行资源"),
+                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "前序工单", "工单编号(前序)"),
+                    _idx("j", "obj-work-order", "work_order_id", "工单集合", "后序工单", "工单编号(后序)"),
+                    _idx("k", "obj-machine", "machine_id", "机台集合", "执行资源", "机台编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
-                "businessMeaning": "在机台j上，工单i是否紧接在工单k之前加工",
-                "valueMeaning": {"1": "i先于k", "0": "非此顺序"},
+                "businessMeaning": "在机台k上，工单i是否紧接在工单j之前加工",
+                "valueMeaning": {"1": "i先于j", "0": "非此顺序"},
                 "associatedProperties": [
                     _assoc_prop("obj-work-order", "工单", [{"propertyId": "status", "displayName": "状态"}]),
                     _assoc_prop("obj-machine", "机台", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "oee", "displayName": "OEE指标"}]),
@@ -203,11 +210,11 @@ PRESET_VARIABLE_SETS = [
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("i", "工单集合", "obj-work-order", "工单"),
+                    _var_index("i", "工单集合", "obj-work-order", "工单", "工单编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-work-order", "work_order_id")],
                 "indexMapping": [
-                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "排程对象"),
+                    _idx("i", "obj-work-order", "work_order_id", "工单集合", "排程对象", "工单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
                 "businessMeaning": "工单i的延期时间（完工时间超过交期的部分）",
@@ -236,7 +243,7 @@ PRESET_VARIABLE_SETS = [
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 场景2: MPS主生产计划
+    # 场景2: MPS主生产计划（0D~3D全覆盖）
     # 业务目标：确定每个产品每个时间周期的生产数量，满足客户订单需求
     # ══════════════════════════════════════════════════════════════════════════
     {
@@ -248,24 +255,39 @@ PRESET_VARIABLE_SETS = [
         "ontology_id": ONTOLOGY_ID,
         "variables": [
             {
+                "id": "dv-mps-total-cost",
+                "symbol": "TOTAL_COST_总生产成本",
+                "name": "总生产成本",
+                "nameEn": "total_production_cost",
+                "nature": "association",
+                "dimension": "0D",
+                "domain": "continuous",
+                "indices": [],
+                "ontologyRefs": [],
+                "indexMapping": [],
+                "lowerBound": 0, "upperBound": None,
+                "businessMeaning": "所有产品的总生产成本（含生产成本、库存持有成本和欠货惩罚）",
+                "unit": "元",
+            },
+            {
                 "id": "dv-mps-prod-qty",
                 "symbol": "PROD_产出数量",
                 "name": "产品周期产出量",
-                                "nameEn": "product_period_output_quantity",
+                "nameEn": "product_period_output_quantity",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "integer",
                 "indices": [
-                    _var_index("p", "产品集合", "obj-product", "产品"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "产品集合", "obj-product", "产品", "产品编号"),
+                    _var_index("j", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-product", "product_id")],
                 "indexMapping": [
-                    _idx("p", "obj-product", "product_id", "产品集合", "生产品种"),
-                    _idx("t", None, None, "时间周期集合", "计划周期"),
+                    _idx("i", "obj-product", "product_id", "产品集合", "生产品种", "产品编号"),
+                    _idx("j", None, None, "时间周期集合", "计划周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "产品p在时间周期t内的计划生产数量",
+                "businessMeaning": "产品i在时间周期j内的计划生产数量",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-product", "产品", [{"propertyId": "name", "displayName": "名称"}, {"propertyId": "category", "displayName": "类别"}]),
@@ -275,24 +297,24 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mps-ord-accept",
                 "symbol": "ORD_订单接受",
                 "name": "客户订单接受",
-                                "nameEn": "customer_order_acceptance",
+                "nameEn": "customer_order_acceptance",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("c", "客户集合", "obj-customer", "客户"),
-                    _var_index("p", "产品集合", "obj-product", "产品"),
+                    _var_index("i", "客户集合", "obj-customer", "客户", "客户编号"),
+                    _var_index("j", "产品集合", "obj-product", "产品", "产品编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-customer", "customer_id"),
                     _ont_ref("obj-product", "product_id"),
                 ],
                 "indexMapping": [
-                    _idx("c", "obj-customer", "customer_id", "客户集合", "需求方"),
-                    _idx("p", "obj-product", "product_id", "产品集合", "需求品种"),
+                    _idx("i", "obj-customer", "customer_id", "客户集合", "需求方", "客户编号"),
+                    _idx("j", "obj-product", "product_id", "产品集合", "需求品种", "产品编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
-                "businessMeaning": "是否接受客户c对产品p的订单",
+                "businessMeaning": "是否接受客户i对产品j的订单",
                 "valueMeaning": {"1": "接受", "0": "拒绝"},
                 "associatedProperties": [
                     _assoc_prop("obj-customer", "客户", [{"propertyId": "name", "displayName": "名称"}, {"propertyId": "type", "displayName": "类型"}]),
@@ -303,24 +325,24 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mps-alloc",
                 "symbol": "ALLOC_产品分配",
                 "name": "产品客户分配量",
-                                "nameEn": "product_customer_allocation",
+                "nameEn": "product_customer_allocation",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("p", "产品集合", "obj-product", "产品"),
-                    _var_index("c", "客户集合", "obj-customer", "客户"),
+                    _var_index("i", "产品集合", "obj-product", "产品", "产品编号"),
+                    _var_index("j", "客户集合", "obj-customer", "客户", "客户编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-product", "product_id"),
                     _ont_ref("obj-customer", "customer_id"),
                 ],
                 "indexMapping": [
-                    _idx("p", "obj-product", "product_id", "产品集合", "分配品种"),
-                    _idx("c", "obj-customer", "customer_id", "客户集合", "接收方"),
+                    _idx("i", "obj-product", "product_id", "产品集合", "分配品种", "产品编号"),
+                    _idx("j", "obj-customer", "customer_id", "客户集合", "接收方", "客户编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "产品p分配给客户c的数量",
+                "businessMeaning": "产品i分配给客户j的数量",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-product", "产品", [{"propertyId": "name", "displayName": "名称"}]),
@@ -331,21 +353,21 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mps-inv-fg",
                 "symbol": "INV_成品库存",
                 "name": "成品周期库存",
-                                "nameEn": "finished_goods_inventory",
+                "nameEn": "finished_goods_inventory",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("p", "产品集合", "obj-product", "产品"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "产品集合", "obj-product", "产品", "产品编号"),
+                    _var_index("j", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-product", "product_id")],
                 "indexMapping": [
-                    _idx("p", "obj-product", "product_id", "产品集合", "库存品种"),
-                    _idx("t", None, None, "时间周期集合", "库存周期"),
+                    _idx("i", "obj-product", "product_id", "产品集合", "库存品种", "产品编号"),
+                    _idx("j", None, None, "时间周期集合", "库存周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "产品p在周期t末的成品库存水平",
+                "businessMeaning": "产品i在周期j末的成品库存水平",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-product", "产品", [{"propertyId": "name", "displayName": "名称"}]),
@@ -355,26 +377,26 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mps-backlog",
                 "symbol": "BACKLOG_欠货量",
                 "name": "客户欠货量",
-                                "nameEn": "customer_backlog_quantity",
+                "nameEn": "customer_backlog_quantity",
                 "nature": "association",
                 "dimension": "3D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("c", "客户集合", "obj-customer", "客户"),
-                    _var_index("p", "产品集合", "obj-product", "产品"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "客户集合", "obj-customer", "客户", "客户编号"),
+                    _var_index("j", "产品集合", "obj-product", "产品", "产品编号"),
+                    _var_index("k", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-customer", "customer_id"),
                     _ont_ref("obj-product", "product_id"),
                 ],
                 "indexMapping": [
-                    _idx("c", "obj-customer", "customer_id", "客户集合", "欠货客户"),
-                    _idx("p", "obj-product", "product_id", "产品集合", "欠货品种"),
-                    _idx("t", None, None, "时间周期集合", "欠货周期"),
+                    _idx("i", "obj-customer", "customer_id", "客户集合", "欠货客户", "客户编号"),
+                    _idx("j", "obj-product", "product_id", "产品集合", "欠货品种", "产品编号"),
+                    _idx("k", None, None, "时间周期集合", "欠货周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "客户c对产品p在周期t的未满足需求量",
+                "businessMeaning": "客户i对产品j在周期k的未满足需求量",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-customer", "客户", [{"propertyId": "name", "displayName": "名称"}]),
@@ -385,27 +407,27 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mps-pri-customer",
                 "symbol": "PRI_客户优先级",
                 "name": "客户优先级",
-                                "nameEn": "customer_priority",
-                "nature": "direct_ref",
+                "nameEn": "customer_priority",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "integer",
                 "indices": [
-                    _var_index("c", "客户集合", "obj-customer", "客户"),
+                    _var_index("i", "客户集合", "obj-customer", "客户", "客户编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-customer", "type")],
+                "ontologyRefs": [_ont_ref("obj-customer", "customer_id"), _ont_ref("obj-customer", "type")],
                 "directRef": _direct_ref("obj-customer", "type", "客户.类型(优先级)"),
                 "indexMapping": [
-                    _idx("c", "obj-customer", "customer_id", "客户集合", "优先级对象"),
+                    _idx("i", "obj-customer", "customer_id", "客户集合", "优先级对象", "客户编号"),
                 ],
                 "lowerBound": 1, "upperBound": 5,
-                "businessMeaning": "客户c的服务优先级等级（由客户类型映射）",
+                "businessMeaning": "客户i的服务优先级等级（由客户类型映射）",
             },
         ],
         "created_at": _ts(), "updated_at": _ts(),
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 场景3: MRP物料需求计划
+    # 场景3: MRP物料需求计划（0D~3D全覆盖）
     # 业务目标：根据MPS生产计划，通过BOM展开计算物料需求，确定采购计划
     # ══════════════════════════════════════════════════════════════════════════
     {
@@ -417,24 +439,39 @@ PRESET_VARIABLE_SETS = [
         "ontology_id": ONTOLOGY_ID,
         "variables": [
             {
+                "id": "dv-mrp-total-purchase-cost",
+                "symbol": "TOTAL_COST_总采购成本",
+                "name": "总采购成本",
+                "nameEn": "total_purchase_cost",
+                "nature": "association",
+                "dimension": "0D",
+                "domain": "continuous",
+                "indices": [],
+                "ontologyRefs": [],
+                "indexMapping": [],
+                "lowerBound": 0, "upperBound": None,
+                "businessMeaning": "所有供应商物料采购的总成本",
+                "unit": "元",
+            },
+            {
                 "id": "dv-mrp-demand",
                 "symbol": "MRP_物料需求",
                 "name": "物料周期需求量",
-                                "nameEn": "material_demand_quantity",
+                "nameEn": "material_demand_quantity",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
+                    _var_index("j", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "需求物料"),
-                    _idx("t", None, None, "时间周期集合", "需求周期"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "需求物料", "物料编号"),
+                    _idx("j", None, None, "时间周期集合", "需求周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m在周期t内的总需求量（由BOM展开计算）",
+                "businessMeaning": "物料i在周期j内的总需求量（由BOM展开计算）",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}, {"propertyId": "category", "displayName": "类别"}]),
@@ -444,26 +481,26 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mrp-purchase",
                 "symbol": "PURCHASE_采购量",
                 "name": "供应商物料采购量",
-                                "nameEn": "supplier_material_purchase_quantity",
+                "nameEn": "supplier_material_purchase_quantity",
                 "nature": "association",
                 "dimension": "3D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("s", "供应商集合", "obj-supplier", "供应商"),
-                    _var_index("m", "物料集合", "obj-material", "物料"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "供应商集合", "obj-supplier", "供应商", "供应商编号"),
+                    _var_index("j", "物料集合", "obj-material", "物料", "物料编号"),
+                    _var_index("k", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-supplier", "supplier_id"),
                     _ont_ref("obj-material", "material_id"),
                 ],
                 "indexMapping": [
-                    _idx("s", "obj-supplier", "supplier_id", "供应商集合", "供应来源"),
-                    _idx("m", "obj-material", "material_id", "物料集合", "采购品种"),
-                    _idx("t", None, None, "时间周期集合", "采购周期"),
+                    _idx("i", "obj-supplier", "supplier_id", "供应商集合", "供应来源", "供应商编号"),
+                    _idx("j", "obj-material", "material_id", "物料集合", "采购品种", "物料编号"),
+                    _idx("k", None, None, "时间周期集合", "采购周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "从供应商s采购物料m在周期t的数量",
+                "businessMeaning": "从供应商i采购物料j在周期k的数量",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-supplier", "供应商", [{"propertyId": "name", "displayName": "名称"}, {"propertyId": "location", "displayName": "所在地"}]),
@@ -474,24 +511,24 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mrp-z-supplier",
                 "symbol": "Z_供应商选择",
                 "name": "供应商物料选择",
-                                "nameEn": "supplier_material_selection",
+                "nameEn": "supplier_material_selection",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("s", "供应商集合", "obj-supplier", "供应商"),
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "供应商集合", "obj-supplier", "供应商", "供应商编号"),
+                    _var_index("j", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-supplier", "supplier_id"),
                     _ont_ref("obj-material", "material_id"),
                 ],
                 "indexMapping": [
-                    _idx("s", "obj-supplier", "supplier_id", "供应商集合", "候选供应商"),
-                    _idx("m", "obj-material", "material_id", "物料集合", "供应物料"),
+                    _idx("i", "obj-supplier", "supplier_id", "供应商集合", "候选供应商", "供应商编号"),
+                    _idx("j", "obj-material", "material_id", "物料集合", "供应物料", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
-                "businessMeaning": "是否从供应商s采购物料m",
+                "businessMeaning": "是否从供应商i采购物料j",
                 "valueMeaning": {"1": "选择", "0": "不选择"},
                 "associatedProperties": [
                     _assoc_prop("obj-supplier", "供应商", [{"propertyId": "name", "displayName": "名称"}]),
@@ -502,21 +539,21 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mrp-inv-material",
                 "symbol": "INV_物料库存",
                 "name": "物料周期库存",
-                                "nameEn": "material_period_inventory",
+                "nameEn": "material_period_inventory",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
+                    _var_index("j", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "库存物料"),
-                    _idx("t", None, None, "时间周期集合", "库存周期"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "库存物料", "物料编号"),
+                    _idx("j", None, None, "时间周期集合", "库存周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m在周期t末的库存水平",
+                "businessMeaning": "物料i在周期j末的库存水平",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
@@ -526,24 +563,24 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mrp-bom-consume",
                 "symbol": "BOM_物料消耗",
                 "name": "BOM物料消耗系数",
-                                "nameEn": "bom_material_consumption_coefficient",
+                "nameEn": "bom_material_consumption_coefficient",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("p", "产品集合", "obj-product", "产品"),
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "产品集合", "obj-product", "产品", "产品编号"),
+                    _var_index("j", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-product", "product_id"),
                     _ont_ref("obj-material", "material_id"),
                 ],
                 "indexMapping": [
-                    _idx("p", "obj-product", "product_id", "产品集合", "父项产品"),
-                    _idx("m", "obj-material", "material_id", "物料集合", "子项物料"),
+                    _idx("i", "obj-product", "product_id", "产品集合", "父项产品", "产品编号"),
+                    _idx("j", "obj-material", "material_id", "物料集合", "子项物料", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "生产单位产品p所需物料m的数量（BOM展开系数）",
+                "businessMeaning": "生产单位产品i所需物料j的数量（BOM展开系数）",
                 "unit": "件/件",
                 "associatedProperties": [
                     _assoc_prop("obj-product", "产品", [{"propertyId": "name", "displayName": "名称"}]),
@@ -554,21 +591,21 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mrp-receipt",
                 "symbol": "RECEIPT_到货量",
                 "name": "物料到货量",
-                                "nameEn": "material_receipt_quantity",
+                "nameEn": "material_receipt_quantity",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
-                    _var_index("t", "时间周期集合", None, "计划周期"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
+                    _var_index("j", "时间周期集合", None, "计划周期", "计划周期编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "到货物料"),
-                    _idx("t", None, None, "时间周期集合", "到货周期"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "到货物料", "物料编号"),
+                    _idx("j", None, None, "时间周期集合", "到货周期", "计划周期编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m在周期t内的到货入库数量",
+                "businessMeaning": "物料i在周期j内的到货入库数量",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
@@ -578,20 +615,20 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-mrp-q-reorder",
                 "symbol": "Q_补货数量",
                 "name": "物料补货批量",
-                                "nameEn": "material_reorder_quantity",
-                "nature": "direct_ref",
+                "nameEn": "reorder_quantity",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "integer",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-inventory", "reorder_quantity")],
+                "ontologyRefs": [_ont_ref("obj-inventory", "reorder_quantity"), _ont_ref("obj-material", "material_id")],
                 "directRef": _direct_ref("obj-inventory", "reorder_quantity", "库存.补货批量"),
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "补货物料"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "补货物料", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m的单次补货批量",
+                "businessMeaning": "物料i的单次补货批量",
                 "unit": "件",
             },
         ],
@@ -599,7 +636,7 @@ PRESET_VARIABLE_SETS = [
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 场景4: 库存优化
+    # 场景4: 库存优化（0D~2D覆盖）
     # 业务目标：优化库存水平、安全库存、再订货点和订货批量
     # ══════════════════════════════════════════════════════════════════════════
     {
@@ -611,62 +648,77 @@ PRESET_VARIABLE_SETS = [
         "ontology_id": ONTOLOGY_ID,
         "variables": [
             {
+                "id": "dv-inv-total-cost",
+                "symbol": "TOTAL_COST_总库存成本",
+                "name": "总库存成本",
+                "nameEn": "total_inventory_cost",
+                "nature": "association",
+                "dimension": "0D",
+                "domain": "continuous",
+                "indices": [],
+                "ontologyRefs": [],
+                "indexMapping": [],
+                "lowerBound": 0, "upperBound": None,
+                "businessMeaning": "所有物料的总库存成本（含持有成本和缺货成本）",
+                "unit": "元",
+            },
+            {
                 "id": "dv-inv-level",
                 "symbol": "INV_库存水平",
                 "name": "物料库存水平",
-                                "nameEn": "material_inventory_level",
-                "nature": "direct_ref",
+                "nameEn": "total_quantity",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-inventory", "total_quantity")],
+                "ontologyRefs": [_ont_ref("obj-inventory", "total_quantity"), _ont_ref("obj-material", "material_id")],
                 "directRef": _direct_ref("obj-inventory", "total_quantity", "库存.总数量"),
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "库存对象"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "库存对象", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m的当前库存水平",
+                "businessMeaning": "物料i的当前库存水平",
                 "unit": "件",
             },
             {
                 "id": "dv-inv-safety",
                 "symbol": "SS_安全库存",
                 "name": "安全库存水平",
-                                "nameEn": "safety_stock_level",
-                "nature": "direct_ref",
+                "nameEn": "safety_stock",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-inventory", "safety_stock")],
+                "ontologyRefs": [_ont_ref("obj-inventory", "safety_stock"), _ont_ref("obj-material", "material_id")],
                 "directRef": _direct_ref("obj-inventory", "safety_stock", "库存.安全库存"),
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "安全库存对象"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "安全库存对象", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m的安全库存水平（最低库存阈值）",
+                "businessMeaning": "物料i的安全库存水平（最低库存阈值）",
                 "unit": "件",
             },
             {
                 "id": "dv-inv-rop",
                 "symbol": "ROP_再订货点",
                 "name": "再订货点",
-                                "nameEn": "reorder_point",
+                "nameEn": "reorder_point",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "库存对象"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "库存对象", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m的再订货点（库存降至该值时触发补货）",
+                "businessMeaning": "物料i的再订货点（库存降至该值时触发补货）",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
@@ -677,19 +729,19 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-inv-eoq",
                 "symbol": "EOQ_经济批量",
                 "name": "经济订货批量",
-                                "nameEn": "economic_order_quantity",
+                "nameEn": "economic_order_quantity",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "integer",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "订货对象"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "订货对象", "物料编号"),
                 ],
                 "lowerBound": 1, "upperBound": None,
-                "businessMeaning": "物料m的经济订货批量（EOQ）",
+                "businessMeaning": "物料i的经济订货批量（EOQ）",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
@@ -699,19 +751,19 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-inv-stockout",
                 "symbol": "STOCKOUT_缺货量",
                 "name": "缺货数量",
-                                "nameEn": "stockout_quantity",
+                "nameEn": "stockout_quantity",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "缺货对象"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "缺货对象", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m的缺货数量（需求超出可用库存的部分）",
+                "businessMeaning": "物料i的缺货数量（需求超出可用库存的部分）",
                 "unit": "件",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
@@ -722,23 +774,51 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-inv-holding",
                 "symbol": "HOLDING_持有成本",
                 "name": "库存持有成本",
-                                "nameEn": "inventory_holding_cost",
+                "nameEn": "inventory_holding_cost",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("m", "物料集合", "obj-material", "物料"),
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-material", "material_id")],
                 "indexMapping": [
-                    _idx("m", "obj-material", "material_id", "物料集合", "成本对象"),
+                    _idx("i", "obj-material", "material_id", "物料集合", "成本对象", "物料编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物料m的库存持有成本",
+                "businessMeaning": "物料i的库存持有成本",
                 "unit": "元",
                 "associatedProperties": [
                     _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
                     _assoc_prop("obj-inventory", "库存", [{"propertyId": "total_quantity", "displayName": "总数量"}]),
+                ],
+            },
+            {
+                "id": "dv-inv-wh-level",
+                "symbol": "INV_WH_仓库库存",
+                "name": "物料仓库库存水平",
+                "nameEn": "material_warehouse_inventory_level",
+                "nature": "association",
+                "dimension": "2D",
+                "domain": "continuous",
+                "indices": [
+                    _var_index("i", "物料集合", "obj-material", "物料", "物料编号"),
+                    _var_index("j", "仓库集合", "obj-warehouse", "仓库", "仓库编号"),
+                ],
+                "ontologyRefs": [
+                    _ont_ref("obj-material", "material_id"),
+                    _ont_ref("obj-warehouse", "name"),
+                ],
+                "indexMapping": [
+                    _idx("i", "obj-material", "material_id", "物料集合", "库存物料", "物料编号"),
+                    _idx("j", "obj-warehouse", "name", "仓库集合", "存储位置", "仓库编号"),
+                ],
+                "lowerBound": 0, "upperBound": None,
+                "businessMeaning": "物料i在仓库j中的库存水平",
+                "unit": "件",
+                "associatedProperties": [
+                    _assoc_prop("obj-material", "物料", [{"propertyId": "name", "displayName": "名称"}]),
+                    _assoc_prop("obj-warehouse", "仓库", [{"propertyId": "name", "displayName": "名称"}, {"propertyId": "capacity", "displayName": "容量"}]),
                 ],
             },
         ],
@@ -746,7 +826,7 @@ PRESET_VARIABLE_SETS = [
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 场景5: 物流运输
+    # 场景5: 物流运输（0D~2D覆盖）
     # 业务目标：选择运输路线和承运商，确定运输批量，最小化物流成本和延期
     # ══════════════════════════════════════════════════════════════════════════
     {
@@ -758,27 +838,42 @@ PRESET_VARIABLE_SETS = [
         "ontology_id": ONTOLOGY_ID,
         "variables": [
             {
+                "id": "dv-log-total-cost",
+                "symbol": "TOTAL_COST_总物流成本",
+                "name": "总物流成本",
+                "nameEn": "total_logistics_cost",
+                "nature": "association",
+                "dimension": "0D",
+                "domain": "continuous",
+                "indices": [],
+                "ontologyRefs": [],
+                "indexMapping": [],
+                "lowerBound": 0, "upperBound": None,
+                "businessMeaning": "所有物流单的总运输成本",
+                "unit": "元",
+            },
+            {
                 "id": "dv-log-route",
                 "symbol": "R_运输路线",
                 "name": "物流路线选择",
-                                "nameEn": "logistics_route_selection",
+                "nameEn": "logistics_route_selection",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("l", "物流单集合", "obj-logistics", "物流单"),
-                    _var_index("w", "仓库集合", "obj-warehouse", "仓库"),
+                    _var_index("i", "物流单集合", "obj-logistics", "物流单", "物流单编号"),
+                    _var_index("j", "仓库集合", "obj-warehouse", "仓库", "仓库编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-logistics", "logistics_id"),
                     _ont_ref("obj-warehouse", "name"),
                 ],
                 "indexMapping": [
-                    _idx("l", "obj-logistics", "logistics_id", "物流单集合", "运输对象"),
-                    _idx("w", "obj-warehouse", "name", "仓库集合", "中转节点"),
+                    _idx("i", "obj-logistics", "logistics_id", "物流单集合", "运输对象", "物流单编号"),
+                    _idx("j", "obj-warehouse", "name", "仓库集合", "中转节点", "仓库编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
-                "businessMeaning": "物流单l是否通过仓库w中转",
+                "businessMeaning": "物流单i是否通过仓库j中转",
                 "valueMeaning": {"1": "选择该路线", "0": "不选择"},
                 "associatedProperties": [
                     _assoc_prop("obj-logistics", "物流单", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "delay_days", "displayName": "延期天数"}]),
@@ -789,61 +884,63 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-log-ship-qty",
                 "symbol": "SHIP_运输数量",
                 "name": "物流运输量",
-                                "nameEn": "logistics_shipping_quantity",
-                "nature": "direct_ref",
+                "nameEn": "logistics_shipping_quantity",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("l", "物流单集合", "obj-logistics", "物流单"),
+                    _var_index("i", "物流单集合", "obj-logistics", "物流单", "物流单编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-logistics", "logistics_id")],
-                "directRef": _direct_ref("obj-logistics", "logistics_id", "物流单.运输量"),
                 "indexMapping": [
-                    _idx("l", "obj-logistics", "logistics_id", "物流单集合", "运输对象"),
+                    _idx("i", "obj-logistics", "logistics_id", "物流单集合", "运输对象", "物流单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物流单l的运输数量",
+                "businessMeaning": "物流单i的运输数量",
                 "unit": "件",
+                "associatedProperties": [
+                    _assoc_prop("obj-logistics", "物流单", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "material_id", "displayName": "物料ID"}]),
+                ],
             },
             {
                 "id": "dv-log-delay",
                 "symbol": "DL_延期天数",
                 "name": "物流延期天数",
-                                "nameEn": "logistics_delay_days",
-                "nature": "direct_ref",
+                "nameEn": "delay_days",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("l", "物流单集合", "obj-logistics", "物流单"),
+                    _var_index("i", "物流单集合", "obj-logistics", "物流单", "物流单编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-logistics", "delay_days")],
+                "ontologyRefs": [_ont_ref("obj-logistics", "delay_days"), _ont_ref("obj-logistics", "logistics_id")],
                 "directRef": _direct_ref("obj-logistics", "delay_days", "物流单.延期天数"),
                 "indexMapping": [
-                    _idx("l", "obj-logistics", "logistics_id", "物流单集合", "延期对象"),
+                    _idx("i", "obj-logistics", "logistics_id", "物流单集合", "延期对象", "物流单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物流单l的实际到达时间超过预期到达时间的天数",
+                "businessMeaning": "物流单i的实际到达时间超过预期到达时间的天数",
                 "unit": "天",
             },
             {
                 "id": "dv-log-carrier",
                 "symbol": "CARRIER_承运商选择",
                 "name": "承运商选择",
-                                "nameEn": "carrier_selection",
+                "nameEn": "carrier_selection",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("l", "物流单集合", "obj-logistics", "物流单"),
-                    _var_index("c", "承运商集合", None, "承运商"),
+                    _var_index("i", "物流单集合", "obj-logistics", "物流单", "物流单编号"),
+                    _var_index("j", "承运商集合", None, "承运商", "承运商编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-logistics", "logistics_id")],
                 "indexMapping": [
-                    _idx("l", "obj-logistics", "logistics_id", "物流单集合", "运输对象"),
-                    _idx("c", None, None, "承运商集合", "承运方"),
+                    _idx("i", "obj-logistics", "logistics_id", "物流单集合", "运输对象", "物流单编号"),
+                    _idx("j", None, None, "承运商集合", "承运方", "承运商编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
-                "businessMeaning": "物流单l是否由承运商c负责运输",
+                "businessMeaning": "物流单i是否由承运商j负责运输",
                 "valueMeaning": {"1": "选择", "0": "不选择"},
                 "associatedProperties": [
                     _assoc_prop("obj-logistics", "物流单", [{"propertyId": "status", "displayName": "状态"}]),
@@ -853,19 +950,19 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-log-cost",
                 "symbol": "COST_运输成本",
                 "name": "物流运输成本",
-                                "nameEn": "logistics_transportation_cost",
+                "nameEn": "logistics_transportation_cost",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("l", "物流单集合", "obj-logistics", "物流单"),
+                    _var_index("i", "物流单集合", "obj-logistics", "物流单", "物流单编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-logistics", "logistics_id")],
                 "indexMapping": [
-                    _idx("l", "obj-logistics", "logistics_id", "物流单集合", "成本对象"),
+                    _idx("i", "obj-logistics", "logistics_id", "物流单集合", "成本对象", "物流单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物流单l的总运输成本",
+                "businessMeaning": "物流单i的总运输成本",
                 "unit": "元",
                 "associatedProperties": [
                     _assoc_prop("obj-logistics", "物流单", [{"propertyId": "status", "displayName": "状态"}]),
@@ -875,19 +972,19 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-log-arrival",
                 "symbol": "ARRIVAL_到达时间",
                 "name": "物流到达时间",
-                                "nameEn": "logistics_arrival_time",
+                "nameEn": "logistics_arrival_time",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("l", "物流单集合", "obj-logistics", "物流单"),
+                    _var_index("i", "物流单集合", "obj-logistics", "物流单", "物流单编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-logistics", "logistics_id")],
                 "indexMapping": [
-                    _idx("l", "obj-logistics", "logistics_id", "物流单集合", "到达对象"),
+                    _idx("i", "obj-logistics", "logistics_id", "物流单集合", "到达对象", "物流单编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "物流单l的实际到达时间",
+                "businessMeaning": "物流单i的实际到达时间",
                 "unit": "天",
                 "associatedProperties": [
                     _assoc_prop("obj-logistics", "物流单", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "delay_days", "displayName": "延期天数"}]),
@@ -898,7 +995,7 @@ PRESET_VARIABLE_SETS = [
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 场景6: 任务调度
+    # 场景6: 任务调度（0D~3D全覆盖）
     # 业务目标：将细粒度生产任务调度到机台，确定执行顺序，最小化换线时间和完工时间
     # ══════════════════════════════════════════════════════════════════════════
     {
@@ -910,24 +1007,39 @@ PRESET_VARIABLE_SETS = [
         "ontology_id": ONTOLOGY_ID,
         "variables": [
             {
+                "id": "dv-task-total-idle",
+                "symbol": "TOTAL_IDLE_总空闲时间",
+                "name": "总空闲时间",
+                "nameEn": "total_idle_time",
+                "nature": "association",
+                "dimension": "0D",
+                "domain": "continuous",
+                "indices": [],
+                "ontologyRefs": [],
+                "indexMapping": [],
+                "lowerBound": 0, "upperBound": None,
+                "businessMeaning": "所有机台在调度周期内的总空闲时间",
+                "unit": "小时",
+            },
+            {
                 "id": "dv-task-assign",
                 "symbol": "A_任务分配",
                 "name": "任务机台分配",
-                                "nameEn": "task_machine_assignment",
+                "nameEn": "task_machine_assignment",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("i", "生产任务集合", "obj-task", "生产任务"),
-                    _var_index("j", "机台集合", "obj-machine", "机台"),
+                    _var_index("i", "生产任务集合", "obj-task", "生产任务", "生产任务编号"),
+                    _var_index("j", "机台集合", "obj-machine", "机台", "机台编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-task", "task_id"),
                     _ont_ref("obj-machine", "machine_id"),
                 ],
                 "indexMapping": [
-                    _idx("i", "obj-task", "task_id", "生产任务集合", "被调度对象"),
-                    _idx("j", "obj-machine", "machine_id", "机台集合", "执行资源"),
+                    _idx("i", "obj-task", "task_id", "生产任务集合", "被调度对象", "生产任务编号"),
+                    _idx("j", "obj-machine", "machine_id", "机台集合", "执行资源", "机台编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
                 "businessMeaning": "生产任务i是否分配给机台j执行",
@@ -941,16 +1053,16 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-task-ts-start",
                 "symbol": "TS_任务开始",
                 "name": "任务开始时间",
-                                "nameEn": "task_start_time",
+                "nameEn": "task_start_time",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("i", "生产任务集合", "obj-task", "生产任务"),
+                    _var_index("i", "生产任务集合", "obj-task", "生产任务", "生产任务编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-task", "task_id")],
                 "indexMapping": [
-                    _idx("i", "obj-task", "task_id", "生产任务集合", "调度对象"),
+                    _idx("i", "obj-task", "task_id", "生产任务集合", "调度对象", "生产任务编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
                 "businessMeaning": "生产任务i的开始执行时间",
@@ -963,16 +1075,16 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-task-tc-end",
                 "symbol": "TC_任务完工",
                 "name": "任务完工时间",
-                                "nameEn": "task_completion_time",
+                "nameEn": "task_completion_time",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("i", "生产任务集合", "obj-task", "生产任务"),
+                    _var_index("i", "生产任务集合", "obj-task", "生产任务", "生产任务编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-task", "task_id")],
                 "indexMapping": [
-                    _idx("i", "obj-task", "task_id", "生产任务集合", "调度对象"),
+                    _idx("i", "obj-task", "task_id", "生产任务集合", "调度对象", "生产任务编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
                 "businessMeaning": "生产任务i的完工时间",
@@ -985,21 +1097,21 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-task-seq",
                 "symbol": "SEQ_执行顺序",
                 "name": "任务执行位置",
-                                "nameEn": "task_execution_sequence",
+                "nameEn": "task_execution_sequence",
                 "nature": "association",
                 "dimension": "2D",
                 "domain": "integer",
                 "indices": [
-                    _var_index("i", "生产任务集合", "obj-task", "生产任务"),
-                    _var_index("j", "机台集合", "obj-machine", "机台"),
+                    _var_index("i", "生产任务集合", "obj-task", "生产任务", "生产任务编号"),
+                    _var_index("j", "机台集合", "obj-machine", "机台", "机台编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-task", "task_id"),
                     _ont_ref("obj-machine", "machine_id"),
                 ],
                 "indexMapping": [
-                    _idx("i", "obj-task", "task_id", "生产任务集合", "排序对象"),
-                    _idx("j", "obj-machine", "machine_id", "机台集合", "排序机台"),
+                    _idx("i", "obj-task", "task_id", "生产任务集合", "排序对象", "生产任务编号"),
+                    _idx("j", "obj-machine", "machine_id", "机台集合", "排序机台", "机台编号"),
                 ],
                 "lowerBound": 1, "upperBound": None,
                 "businessMeaning": "生产任务i在机台j上的执行位置序号",
@@ -1012,26 +1124,26 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-task-chg",
                 "symbol": "CHG_换线",
                 "name": "换线决策",
-                                "nameEn": "machine_changeover_decision",
+                "nameEn": "machine_changeover_decision",
                 "nature": "association",
                 "dimension": "3D",
                 "domain": "binary",
                 "indices": [
-                    _var_index("k", "生产任务集合", "obj-task", "生产任务"),
-                    _var_index("l", "生产任务集合", "obj-task", "生产任务"),
-                    _var_index("j", "机台集合", "obj-machine", "机台"),
+                    _var_index("i", "生产任务集合", "obj-task", "生产任务", "生产任务编号(前序)"),
+                    _var_index("j", "生产任务集合", "obj-task", "生产任务", "生产任务编号(后序)"),
+                    _var_index("k", "机台集合", "obj-machine", "机台", "机台编号"),
                 ],
                 "ontologyRefs": [
                     _ont_ref("obj-task", "task_id"),
                     _ont_ref("obj-machine", "machine_id"),
                 ],
                 "indexMapping": [
-                    _idx("k", "obj-task", "task_id", "生产任务集合", "前序任务"),
-                    _idx("l", "obj-task", "task_id", "生产任务集合", "后序任务"),
-                    _idx("j", "obj-machine", "machine_id", "机台集合", "换线机台"),
+                    _idx("i", "obj-task", "task_id", "生产任务集合", "前序任务", "生产任务编号(前序)"),
+                    _idx("j", "obj-task", "task_id", "生产任务集合", "后序任务", "生产任务编号(后序)"),
+                    _idx("k", "obj-machine", "machine_id", "机台集合", "换线机台", "机台编号"),
                 ],
                 "lowerBound": 0, "upperBound": 1,
-                "businessMeaning": "在机台j上，任务k完成后是否需要换线才能执行任务l",
+                "businessMeaning": "在机台k上，任务i完成后是否需要换线才能执行任务j",
                 "valueMeaning": {"1": "需要换线", "0": "无需换线"},
                 "associatedProperties": [
                     _assoc_prop("obj-task", "生产任务", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "work_order_id", "displayName": "工单ID"}]),
@@ -1042,39 +1154,41 @@ PRESET_VARIABLE_SETS = [
                 "id": "dv-task-qty-output",
                 "symbol": "QTY_任务产出",
                 "name": "任务产出量",
-                                "nameEn": "task_output_quantity",
-                "nature": "direct_ref",
+                "nameEn": "task_output_quantity",
+                "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("i", "生产任务集合", "obj-task", "生产任务"),
+                    _var_index("i", "生产任务集合", "obj-task", "生产任务", "生产任务编号"),
                 ],
-                "ontologyRefs": [_ont_ref("obj-task", "status")],
-                "directRef": _direct_ref("obj-task", "status", "生产任务.状态(产出量)"),
+                "ontologyRefs": [_ont_ref("obj-task", "task_id")],
                 "indexMapping": [
-                    _idx("i", "obj-task", "task_id", "生产任务集合", "产出对象"),
+                    _idx("i", "obj-task", "task_id", "生产任务集合", "产出对象", "生产任务编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
                 "businessMeaning": "生产任务i的实际产出数量",
                 "unit": "件",
+                "associatedProperties": [
+                    _assoc_prop("obj-task", "生产任务", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "work_order_id", "displayName": "工单ID"}]),
+                ],
             },
             {
                 "id": "dv-task-idle",
                 "symbol": "IDLE_机台空闲",
                 "name": "机台空闲时间",
-                                "nameEn": "machine_idle_time",
+                "nameEn": "machine_idle_time",
                 "nature": "association",
                 "dimension": "1D",
                 "domain": "continuous",
                 "indices": [
-                    _var_index("j", "机台集合", "obj-machine", "机台"),
+                    _var_index("i", "机台集合", "obj-machine", "机台", "机台编号"),
                 ],
                 "ontologyRefs": [_ont_ref("obj-machine", "machine_id")],
                 "indexMapping": [
-                    _idx("j", "obj-machine", "machine_id", "机台集合", "空闲对象"),
+                    _idx("i", "obj-machine", "machine_id", "机台集合", "空闲对象", "机台编号"),
                 ],
                 "lowerBound": 0, "upperBound": None,
-                "businessMeaning": "机台j在调度周期内的总空闲时间",
+                "businessMeaning": "机台i在调度周期内的总空闲时间",
                 "unit": "小时",
                 "associatedProperties": [
                     _assoc_prop("obj-machine", "机台", [{"propertyId": "status", "displayName": "状态"}, {"propertyId": "oee", "displayName": "OEE指标"}]),
@@ -1084,7 +1198,6 @@ PRESET_VARIABLE_SETS = [
         "created_at": _ts(), "updated_at": _ts(),
     },
 ]
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 预置约束条件集 —— 按业务场景分组
@@ -1704,10 +1817,14 @@ def init_presets():
         existing = var_col.find_one({"_id": vs["_id"]})
         var_col.replace_one({"_id": vs["_id"]}, vs, upsert=True)
         var_count = len(vs.get("variables", []))
-        direct = sum(1 for v in vs.get("variables", []) if v.get("nature") == "direct_ref")
-        assoc = var_count - direct
+        direct_ref_count = sum(1 for v in vs.get("variables", []) if v.get("directRef"))
+        dims = {}
+        for v in vs.get("variables", []):
+            d = v.get("dimension", "unknown")
+            dims[d] = dims.get(d, 0) + 1
+        dim_summary = "/".join(f"{d}{dims[d]}" for d in sorted(dims.keys(), key=lambda x: ["0D","1D","2D","3D"].index(x) if x in ["0D","1D","2D","3D"] else 99))
         action = "更新" if existing else "创建"
-        print(f"  ✅ {action}变量集: {vs['_id']} ({vs['name']})，含 {var_count} 个变量（{direct}直引+{assoc}关联）")
+        print(f"  ✅ {action}变量集: {vs['_id']} ({vs['name']})，含 {var_count} 个变量（{direct_ref_count}直引+{var_count - direct_ref_count}关联，维度:{dim_summary})")
 
     # 写入约束条件集（覆盖更新）
     for cs in PRESET_CONSTRAINT_SETS:
@@ -1720,10 +1837,15 @@ def init_presets():
     print("\n" + "=" * 60)
     print("初始化完成！")
     total_vars = sum(len(vs.get("variables", [])) for vs in PRESET_VARIABLE_SETS)
-    total_direct = sum(1 for vs in PRESET_VARIABLE_SETS for v in vs.get("variables", []) if v.get("nature") == "direct_ref")
-    total_assoc = total_vars - total_direct
+    total_direct_ref = sum(1 for vs in PRESET_VARIABLE_SETS for v in vs.get("variables", []) if v.get("directRef"))
     total_cons = sum(len(cs.get("constraints", [])) for cs in PRESET_CONSTRAINT_SETS)
-    print(f"  决策变量集: {len(PRESET_VARIABLE_SETS)} 个场景（共 {total_vars} 个变量：{total_direct}直引+{total_assoc}关联）")
+    all_dims = {}
+    for vs in PRESET_VARIABLE_SETS:
+        for v in vs.get("variables", []):
+            d = v.get("dimension", "unknown")
+            all_dims[d] = all_dims.get(d, 0) + 1
+    dim_summary = "/".join(f"{d}{all_dims[d]}" for d in sorted(all_dims.keys(), key=lambda x: ["0D","1D","2D","3D"].index(x) if x in ["0D","1D","2D","3D"] else 99))
+    print(f"  决策变量集: {len(PRESET_VARIABLE_SETS)} 个场景（共 {total_vars} 个变量：{total_direct_ref}直引+{total_vars - total_direct_ref}关联，维度:{dim_summary})")
     print(f"  约束条件集: {len(PRESET_CONSTRAINT_SETS)} 个场景（共 {total_cons} 个约束）")
     print("=" * 60)
 

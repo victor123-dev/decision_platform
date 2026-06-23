@@ -5,6 +5,7 @@ from app.database.sqlite_client import SessionLocal
 from app.database.sqlite_models import DecisionFlowDB, RuleSet, Rule, OptimizationModelDB, OntologyInstance
 from app.database import get_db
 from app.database.neo4j_client import neo4j_client
+from app.services.solver_adapters import SolverAdapterFactory
 import logging
 import json
 import re
@@ -259,22 +260,52 @@ class FlowEngine:
             try:
                 db_model = db.query(OptimizationModelDB).filter(OptimizationModelDB.id == model_id).first()
                 if db_model:
-                    # 从SQLite重建模型对象
-                    from app.routers.optimization import OptimizationModel, OptimizationVariable, OptimizationConstraint, OptimizationObjective
-                    variables = [OptimizationVariable(**v) for v in json.loads(db_model.variables or "[]")]
-                    constraints = [OptimizationConstraint(**c) for c in json.loads(db_model.constraints or "[]")]
-                    objective = OptimizationObjective(**json.loads(db_model.objective_expression or "{}"))
-                    model = OptimizationModel(
-                        id=db_model.id,
-                        name=db_model.name,
-                        description=db_model.description or "",
-                        problem_type=db_model.problem_type or "LP",
-                        status=db_model.status or "draft",
-                        variables=variables,
-                        constraints=constraints,
-                        objective=objective,
-                    )
+                    problem_type = db_model.problem_type or "LP"
                     try:
+                        if problem_type == "CP_SAT":
+                            # CP-SAT 路径 - 使用适配器工厂
+                            adapter = SolverAdapterFactory.create(problem_type)
+                            algorithm_config = json.loads(db_model.algorithm_config or "{}")
+                            solver_config = json.loads(db_model.solver_config or "{}")
+
+                            model_data = {
+                                "intVars": algorithm_config.get("intVars", []),
+                                "boolVars": algorithm_config.get("boolVars", []),
+                                "intervalVars": algorithm_config.get("intervalVars", []),
+                                "linearConstraints": algorithm_config.get("linearConstraints", []),
+                                "globalConstraints": algorithm_config.get("globalConstraints", []),
+                                "objective": algorithm_config.get("objective"),
+                            }
+
+                            result = adapter.solve(model_data, solver_config)
+                            solve_status = result.get("status", "unknown")
+
+                            if solve_status in ("optimal", "feasible"):
+                                solution = result.get("solution", {})
+                                context['optimization_solution'] = solution
+                                context['objective_value'] = result.get("objective_value")
+                                return {'step': len(context.keys()), 'node': node.data.get('label', '优化求解'),
+                                        'status': 'success', 'input': f'modelId={model_id}', 'output': str(solution)}
+                            else:
+                                return {'step': len(context.keys()), 'node': node.data.get('label', '优化求解'),
+                                        'status': 'error', 'input': f'modelId={model_id}', 'output': f'求解失败: {solve_status}'}
+
+                        # LP/MIP 路径 - 保持原有逻辑
+                        from app.routers.optimization import OptimizationModel, OptimizationVariable, OptimizationConstraint, OptimizationObjective
+                        variables = [OptimizationVariable(**v) for v in json.loads(db_model.variables or "[]")]
+                        constraints = [OptimizationConstraint(**c) for c in json.loads(db_model.constraints or "[]")]
+                        objective = OptimizationObjective(**json.loads(db_model.objective_expression or "{}"))
+                        model = OptimizationModel(
+                            id=db_model.id,
+                            name=db_model.name,
+                            description=db_model.description or "",
+                            problem_type=problem_type,
+                            status=db_model.status or "draft",
+                            variables=variables,
+                            constraints=constraints,
+                            objective=objective,
+                        )
+
                         col_indices = {v.name: i for i, v in enumerate(model.variables)}
 
                         solver = pywraplp.Solver.CreateSolver('SCIP')
@@ -509,6 +540,681 @@ class FlowEngine:
                         'output': str(e)}
             finally:
                 db.close()
+
+        # --- JVS 规则引擎新增节点 (v3 — 对齐JVS属性配置规范v3) ---
+
+        elif node_type == 'assignment':
+            config = node.data.get('config', {})
+            target_variable = config.get('target_variable', 'result')
+            variable_type = config.get('variable_type', '字符串')
+            assignment_mode = config.get('assignment_mode', '基础赋值')
+            value_source = config.get('value_source', '固定值')
+            fixed_value = config.get('fixed_value', '')
+            ref_variable = config.get('ref_variable', '')
+            expression = config.get('expression', '')
+            condition_expression = config.get('condition_expression', '')
+            mapping_rules_raw = config.get('mapping_rules', '[]')
+            default_value = config.get('default_value', '')
+
+            try:
+                mapping_rules = json.loads(mapping_rules_raw) if isinstance(mapping_rules_raw, str) else mapping_rules_raw
+            except Exception:
+                mapping_rules = []
+
+            def replace_var(match):
+                var_name = match.group(1)
+                val = context.get(var_name, '')
+                if isinstance(val, str):
+                    return f'"{val}"'
+                return str(val)
+
+            result = default_value
+            try:
+                if assignment_mode == '基础赋值':
+                    if value_source == '固定值':
+                        result = fixed_value
+                    elif value_source == '引用变量':
+                        result = context.get(ref_variable, default_value)
+                    elif value_source == '表达式':
+                        resolved_expr = re.sub(r'\$\{(\w+)\}', replace_var, expression)
+                        result = simple_eval(resolved_expr)
+                    elif value_source == '函数计算':
+                        resolved_expr = re.sub(r'\$\{(\w+)\}', replace_var, expression)
+                        result = simple_eval(resolved_expr)
+                    elif value_source == '节点结果':
+                        result = context.get(ref_variable, default_value)
+                    else:
+                        result = fixed_value
+                elif assignment_mode == '映射赋值':
+                    source_val = context.get(ref_variable, None)
+                    result = default_value
+                    if source_val is not None:
+                        for rule in mapping_rules:
+                            match_val = rule.get('match', rule.get('source', ''))
+                            assign_val = rule.get('value', rule.get('target', ''))
+                            if str(source_val) == str(match_val):
+                                result = assign_val
+                                break
+                elif assignment_mode == '条件赋值':
+                    resolved_cond = re.sub(r'\$\{(\w+)\}', replace_var, condition_expression)
+                    try:
+                        cond_met = simple_eval(resolved_cond)
+                    except Exception:
+                        cond_met = False
+                    if cond_met:
+                        if value_source in ('表达式', '函数计算'):
+                            resolved_expr = re.sub(r'\$\{(\w+)\}', replace_var, expression)
+                            result = simple_eval(resolved_expr)
+                        elif value_source == '引用变量':
+                            result = context.get(ref_variable, default_value)
+                        else:
+                            result = fixed_value
+                    else:
+                        result = default_value
+
+                # Type coercion based on variable_type
+                if variable_type == '整数':
+                    result = int(float(result)) if result != '' and result is not None else 0
+                elif variable_type == '小数':
+                    result = float(result) if result != '' and result is not None else 0.0
+                elif variable_type == '布尔':
+                    result = bool(result)
+                elif variable_type == '日期':
+                    result = str(result)
+                elif variable_type == '集合':
+                    if isinstance(result, str):
+                        try:
+                            result = json.loads(result)
+                        except Exception:
+                            result = [result]
+            except Exception as e:
+                logger.warning(f"Assignment expression error: {e}")
+                result = default_value if default_value else None
+
+            context[target_variable] = result
+            return {'step': len(context.keys()), 'node': node.data.get('label', '赋值'),
+                    'status': 'success',
+                    'input': f'{target_variable} = ({assignment_mode}/{value_source})',
+                    'output': f'{target_variable} = {result}'}
+
+        elif node_type == 'simple_scorecard':
+            config = node.data.get('config', {})
+            base_score = config.get('base_score', 0)
+            score_items_raw = config.get('score_items', '[]')
+            score_sum_enabled = config.get('score_sum', True)
+            weight_sum_enabled = config.get('weight_sum', False)
+            result_variable = config.get('result_variable', 'scorecard_score')
+            min_score = config.get('min_score', None)
+            max_score = config.get('max_score', None)
+            evaluation_dims_raw = config.get('evaluation_dimensions', '[]')
+
+            try:
+                score_items = json.loads(score_items_raw) if isinstance(score_items_raw, str) else score_items_raw
+            except Exception:
+                score_items = []
+            try:
+                evaluation_dims = json.loads(evaluation_dims_raw) if isinstance(evaluation_dims_raw, str) else evaluation_dims_raw
+            except Exception:
+                evaluation_dims = []
+
+            matched_scores = []
+            matched_items = []
+            total_weight = 0.0
+
+            for item in score_items:
+                variable_name = item.get('variable_name', '')
+                variable_type = item.get('variable_type', '小数')
+                weight_str = str(item.get('weight', '100%')).replace('%', '')
+                scoring_condition = item.get('scoring_condition', '')
+                value_source = item.get('value_source', '固定值')
+                value = item.get('value', 0)
+                note = item.get('note', '')
+
+                try:
+                    weight = float(weight_str) / 100.0
+                except (ValueError, TypeError):
+                    weight = 1.0
+
+                context_val = context.get(variable_name)
+                if context_val is None:
+                    continue
+
+                # Parse scoring condition like "当 '年龄' 大于等于 18 时"
+                condition_matched = True
+                if scoring_condition and scoring_condition not in ('请输入', '-'):
+                    condition_matched = True
+                    try:
+                        for op_cn, op_py in [('大于等于', '>='), ('小于等于', '<='), ('等于', '=='), ('大于', '>'), ('小于', '<'), ('不等于', '!=')]:
+                            if op_cn in scoring_condition:
+                                parts = scoring_condition.split(op_cn)
+                                if len(parts) >= 2:
+                                    threshold_str = parts[-1].strip().replace('时', '').strip()
+                                    try:
+                                        threshold = float(threshold_str)
+                                        ctx_val = float(context_val)
+                                    except (ValueError, TypeError):
+                                        threshold = threshold_str
+                                        ctx_val = str(context_val)
+                                    condition_matched = simple_eval(f'{repr(ctx_val)} {op_py} {repr(threshold)}')
+                                    break
+                    except Exception as e:
+                        logger.warning(f"Scorecard condition parse error: {e}")
+                        condition_matched = True
+
+                if condition_matched:
+                    if value_source == '固定值':
+                        score_val = float(value) if value else 0
+                    else:
+                        score_val = float(context.get(str(value), value)) if value else 0
+
+                    weighted_score = score_val * weight if weight_sum_enabled else score_val
+                    matched_scores.append(weighted_score)
+                    matched_items.append({'variable': variable_name, 'score': score_val, 'weight': weight, 'note': note})
+                    total_weight += weight
+
+            subtotal = sum(matched_scores) if score_sum_enabled else (matched_scores[-1] if matched_scores else 0)
+            total = float(base_score) + subtotal
+
+            # Clamp to min/max score range
+            if min_score is not None and total < min_score:
+                total = min_score
+            if max_score is not None and total > max_score:
+                total = max_score
+
+            context[result_variable] = round(total, 2)
+            context['scorecard_result'] = matched_items
+            context['scorecard_score'] = round(total, 2)
+            context['scorecard_base'] = base_score
+            context['scorecard_weight_sum'] = round(total_weight, 2)
+
+            return {'step': len(context.keys()), 'node': node.data.get('label', '简单评分卡'),
+                    'status': 'success',
+                    'input': f'base={base_score}, {len(score_items)} 评分项',
+                    'output': f'{result_variable}={round(total, 2)}, matched={len(matched_items)}'}
+
+        elif node_type == 'complex_scorecard':
+            config = node.data.get('config', {})
+            scoring_rules_raw = config.get('scoring_rules', '[]')
+            scoring_dims_raw = config.get('scoring_dimensions', '[]')
+            aggregation = config.get('aggregation', '加权求和')
+            result_variable = config.get('result_variable', 'complex_scorecard_score')
+            weight_check = config.get('weight_check', False)
+            normalization = config.get('normalization', False)
+            min_score = config.get('min_score', None)
+            max_score = config.get('max_score', None)
+
+            try:
+                scoring_dims = json.loads(scoring_dims_raw) if isinstance(scoring_dims_raw, str) else scoring_dims_raw
+            except Exception:
+                scoring_dims = []
+            try:
+                scoring_rules = json.loads(scoring_rules_raw) if isinstance(scoring_rules_raw, str) else scoring_rules_raw
+            except Exception:
+                scoring_rules = []
+
+            dimension_results = []
+
+            def eval_level_condition(cond, ctx):
+                """Evaluate a JVS-style level condition."""
+                if not cond or cond in ('-', '未设置'):
+                    return True
+                try:
+                    for op_cn, op_py in [('大于等于', '>='), ('小于等于', '<='), ('等于', '=='), ('大于', '>'), ('小于', '<'), ('不等于', '!=')]:
+                        if op_cn in cond:
+                            parts = cond.split(op_cn)
+                            if len(parts) >= 2:
+                                var_match = re.search(r"'(\w+)'", parts[0])
+                                threshold_str = parts[-1].strip().replace('时', '').strip()
+                                if var_match:
+                                    var_name = var_match.group(1)
+                                    ctx_val = ctx.get(var_name, None)
+                                    if ctx_val is not None:
+                                        try:
+                                            threshold = float(threshold_str)
+                                            ctx_val = float(ctx_val)
+                                        except (ValueError, TypeError):
+                                            threshold = threshold_str
+                                            ctx_val = str(ctx_val)
+                                        return simple_eval(f'{repr(ctx_val)} {op_py} {repr(threshold)}')
+                                    else:
+                                        return False
+                            break
+                except Exception as e:
+                    logger.warning(f"Complex scorecard condition parse error: {e}")
+                return True
+
+            if scoring_dims:
+                for dim in scoring_dims:
+                    dim_name = dim.get('name', 'unknown')
+                    weight = dim.get('weight', 1.0)
+                    rules = dim.get('rules', [])
+                    dim_score = 0
+
+                    for rule in rules:
+                        rule_matched = True
+                        for level_key in ['level1', 'level2', 'level3']:
+                            cond = rule.get(level_key, '')
+                            if not eval_level_condition(cond, context):
+                                rule_matched = False
+                                break
+
+                        if rule_matched:
+                            dim_score = rule.get('value', 0)
+                            break
+
+                    dimension_results.append({
+                        'name': dim_name,
+                        'weight': weight,
+                        'score': dim_score,
+                        'weighted_score': dim_score * weight,
+                    })
+            elif scoring_rules:
+                for rule in scoring_rules:
+                    rule_matched = True
+                    for level_key in ['level1_condition', 'level2_condition', 'level3_condition']:
+                        cond = rule.get(level_key, '')
+                        if not eval_level_condition(cond, context):
+                            rule_matched = False
+                            break
+
+                    if rule_matched:
+                        dimension_results.append({
+                            'name': rule.get('note', 'rule'),
+                            'weight': 1.0,
+                            'score': rule.get('value', 0),
+                            'weighted_score': rule.get('value', 0),
+                        })
+                        break
+
+            # Weight validation
+            if weight_check and dimension_results:
+                total_weight = sum(d['weight'] for d in dimension_results)
+                if abs(total_weight - 1.0) > 0.01:
+                    logger.warning(f"Complex scorecard weight check failed: sum={total_weight}")
+
+            # Aggregate
+            if aggregation == '加权求和':
+                total = sum(d['weighted_score'] for d in dimension_results)
+            elif aggregation == '加权平均':
+                tw = sum(d['weight'] for d in dimension_results)
+                total = (sum(d['weighted_score'] for d in dimension_results) / tw) if tw else 0
+            elif aggregation == '取最高维度分':
+                total = max((d['weighted_score'] for d in dimension_results), default=0)
+            elif aggregation == '取最低维度分':
+                total = min((d['weighted_score'] for d in dimension_results), default=0)
+            else:
+                total = sum(d['weighted_score'] for d in dimension_results)
+
+            # Normalization
+            if normalization and dimension_results:
+                max_possible = max((d['score'] for d in dimension_results), default=1)
+                if max_possible > 0:
+                    total = total / max_possible * 100
+
+            # Clamp to min/max
+            if min_score is not None and total < min_score:
+                total = min_score
+            if max_score is not None and total > max_score:
+                total = max_score
+
+            context[result_variable] = round(total, 2)
+            context['complex_scorecard_result'] = dimension_results
+            context['complex_scorecard_score'] = round(total, 2)
+
+            return {'step': len(context.keys()), 'node': node.data.get('label', '复杂评分卡'),
+                    'status': 'success',
+                    'input': f'{len(scoring_dims or scoring_rules)} rules/dims, aggregation={aggregation}',
+                    'output': f'{result_variable}={round(total, 2)}'}
+
+        elif node_type == 'decision_table':
+            config = node.data.get('config', {})
+            condition_variables_raw = config.get('condition_variables', '[]')
+            decision_rules_raw = config.get('decision_rules', '[]')
+            result_vars_raw = config.get('result_variables', '[]')
+            default_result = config.get('default_result', '')
+            hit_policy = config.get('hit_policy', '首次命中')
+            priority_field = config.get('priority_field', 'priority')
+
+            try:
+                condition_variables = json.loads(condition_variables_raw) if isinstance(condition_variables_raw, str) else condition_variables_raw
+            except Exception:
+                condition_variables = []
+            try:
+                decision_rules = json.loads(decision_rules_raw) if isinstance(decision_rules_raw, str) else decision_rules_raw
+            except Exception:
+                decision_rules = []
+            try:
+                result_variables = json.loads(result_vars_raw) if isinstance(result_vars_raw, str) else result_vars_raw
+            except Exception:
+                result_variables = []
+
+            # Initialize result variables with defaults
+            for rv in result_variables:
+                rv_name = rv.get('name', '')
+                rv_default = rv.get('default', '')
+                if rv_name:
+                    context[rv_name] = rv_default
+
+            def evaluate_structured_condition(ctx_val, cond_obj):
+                """Evaluate a structured condition: {operator, value_source, value}"""
+                if isinstance(cond_obj, str):
+                    # Legacy string condition fallback
+                    cond_str = cond_obj.strip()
+                    if not cond_str or cond_str in ('-', '*'):
+                        return True
+                    for op_cn, op_py in [('大于等于', '>='), ('小于等于', '<='), ('不等于', '!='), ('等于', '=='), ('大于', '>'), ('小于', '<')]:
+                        if cond_str.startswith(op_cn):
+                            cmp_val_str = cond_str[len(op_cn):].strip()
+                            try:
+                                cmp_val = float(cmp_val_str)
+                                c_val = float(ctx_val)
+                            except (ValueError, TypeError):
+                                cmp_val = cmp_val_str
+                                c_val = str(ctx_val)
+                            return simple_eval(f'{repr(c_val)} {op_py} {repr(cmp_val)}')
+                    try:
+                        return float(ctx_val) == float(cond_str)
+                    except (ValueError, TypeError):
+                        return str(ctx_val) == str(cond_str)
+
+                # Structured condition object
+                operator_cn = cond_obj.get('operator', '等于')
+                value_source = cond_obj.get('value_source', '固定值')
+                cond_value = cond_obj.get('value', '')
+
+                if value_source == '引用变量':
+                    cmp_val = context.get(cond_value, cond_value)
+                else:
+                    cmp_val = cond_value
+
+                if not operator_cn or operator_cn == '-':
+                    return True
+
+                op_map = {'大于等于': '>=', '小于等于': '<=', '等于': '==', '大于': '>', '小于': '<', '不等于': '!='}
+                op_py = op_map.get(operator_cn, '==')
+
+                try:
+                    try:
+                        cmp_v = float(cmp_val)
+                        ctx_v = float(ctx_val)
+                    except (ValueError, TypeError):
+                        cmp_v = str(cmp_val)
+                        ctx_v = str(ctx_val)
+                    return simple_eval(f'{repr(ctx_v)} {op_py} {repr(cmp_v)}')
+                except Exception:
+                    return False
+
+            # Sort rules by priority if using priority-based policy
+            if hit_policy in ('优先匹配', '优先级命中'):
+                def get_priority(r):
+                    return r.get(priority_field, r.get('priority', 999))
+                decision_rules = sorted(decision_rules, key=get_priority)
+
+            matched_rules = []
+            for rule in decision_rules:
+                conditions = rule.get('conditions', {})
+                all_match = True
+                for var_name, cond_obj in conditions.items():
+                    ctx_val = context.get(var_name)
+                    if ctx_val is None:
+                        all_match = False
+                        break
+                    if not evaluate_structured_condition(ctx_val, cond_obj):
+                        all_match = False
+                        break
+                if all_match:
+                    matched_rules.append(rule)
+
+            # Apply hit policy
+            if hit_policy in ('全部收集',):
+                result_list = matched_rules if matched_rules else []
+            elif hit_policy in ('优先匹配', '优先级命中'):
+                result_list = [matched_rules[0]] if matched_rules else []
+            elif hit_policy == '首次命中':
+                result_list = [matched_rules[0]] if matched_rules else []
+            elif hit_policy == '最近修改优先':
+                result_list = [matched_rules[-1]] if matched_rules else []
+            elif hit_policy == '唯一命中':
+                result_list = [matched_rules[0]] if len(matched_rules) == 1 else []
+            else:
+                result_list = [matched_rules[0]] if matched_rules else []
+
+            # Apply actions from matched rules to context
+            for matched_rule in result_list:
+                actions = matched_rule.get('actions', {})
+                for act_var, act_obj in actions.items():
+                    if isinstance(act_obj, dict):
+                        act_source = act_obj.get('source', '固定值')
+                        act_value = act_obj.get('value', '')
+                        if act_source == '引用变量':
+                            context[act_var] = context.get(act_value, act_value)
+                        elif act_source == '表达式':
+                            def replace_act_var(match):
+                                vn = match.group(1)
+                                vv = context.get(vn, '')
+                                if isinstance(vv, str):
+                                    return f'"{vv}"'
+                                return str(vv)
+                            resolved = re.sub(r'\$\{(\w+)\}', replace_act_var, str(act_value))
+                            try:
+                                context[act_var] = simple_eval(resolved)
+                            except Exception:
+                                context[act_var] = act_value
+                        else:
+                            context[act_var] = act_value
+                    else:
+                        context[act_var] = act_obj
+
+            # Store decision table metadata
+            if result_list:
+                context['decision_table_result'] = result_list[0] if len(result_list) == 1 else result_list
+            else:
+                context['decision_table_result'] = {'default': default_result}
+            context['decision_table_matched_count'] = len(matched_rules)
+
+            return {'step': len(context.keys()), 'node': node.data.get('label', '决策表'),
+                    'status': 'success',
+                    'input': f'{len(decision_rules)} rules, policy={hit_policy}',
+                    'output': f'matched={len(matched_rules)}'}
+
+        elif node_type == 'cross_decision_table':
+            config = node.data.get('config', {})
+            row_variable = config.get('row_variable', '')
+            column_variable = config.get('column_variable', '')
+            row_keys_raw = config.get('row_keys', '[]')
+            column_keys_raw = config.get('column_keys', '[]')
+            matrix_values_raw = config.get('matrix_values', '[]')
+            default_value = config.get('default_value', '')
+            result_variable = config.get('result_variable', 'cross_decision_result')
+            row_operator = config.get('row_operator', '精确匹配')
+            column_operator = config.get('column_operator', '精确匹配')
+            result_type = config.get('result_type', '')
+
+            try:
+                row_keys = json.loads(row_keys_raw) if isinstance(row_keys_raw, str) else row_keys_raw
+            except Exception:
+                row_keys = []
+            try:
+                column_keys = json.loads(column_keys_raw) if isinstance(column_keys_raw, str) else column_keys_raw
+            except Exception:
+                column_keys = []
+            try:
+                matrix_values = json.loads(matrix_values_raw) if isinstance(matrix_values_raw, str) else matrix_values_raw
+            except Exception:
+                matrix_values = []
+
+            row_val = context.get(row_variable, '')
+            col_val = context.get(column_variable, '')
+
+            def find_key_index(keys, val, operator):
+                """Find the matching key index based on operator type."""
+                val_str = str(val)
+                for i, k in enumerate(keys):
+                    k_str = str(k)
+                    if operator == '精确匹配':
+                        if k_str == val_str:
+                            return i
+                    elif operator == '范围匹配':
+                        # Key format: "min~max" or "min-max"
+                        if '~' in k_str:
+                            parts = k_str.split('~')
+                            try:
+                                low = float(parts[0].strip())
+                                high = float(parts[1].strip()) if len(parts) > 1 else float('inf')
+                                if low <= float(val_str) < high:
+                                    return i
+                            except (ValueError, TypeError):
+                                pass
+                        elif '-' in k_str and k_str.count('-') == 1:
+                            parts = k_str.split('-')
+                            try:
+                                low = float(parts[0].strip())
+                                high = float(parts[1].strip())
+                                if low <= float(val_str) < high:
+                                    return i
+                            except (ValueError, TypeError):
+                                pass
+                        else:
+                            if k_str == val_str:
+                                return i
+                    elif operator == '模糊匹配':
+                        if k_str in val_str or val_str in k_str:
+                            return i
+                    else:
+                        if k_str == val_str:
+                            return i
+                return None
+
+            row_idx = find_key_index(row_keys, row_val, row_operator)
+            col_idx = find_key_index(column_keys, col_val, column_operator)
+
+            if row_idx is not None and col_idx is not None:
+                try:
+                    result = matrix_values[row_idx][col_idx]
+                except (IndexError, TypeError):
+                    result = default_value
+            else:
+                result = default_value
+
+            # Type coercion based on result_type
+            if result_type == '整数':
+                try:
+                    result = int(float(result))
+                except (ValueError, TypeError):
+                    pass
+            elif result_type == '小数':
+                try:
+                    result = float(result)
+                except (ValueError, TypeError):
+                    pass
+
+            context[result_variable] = result
+            context['cross_decision_result'] = result
+
+            return {'step': len(context.keys()), 'node': node.data.get('label', '交叉决策表'),
+                    'status': 'success',
+                    'input': f'row={row_variable}={row_val}, col={column_variable}={col_val}',
+                    'output': f'{result_variable}={result}'}
+
+        elif node_type == 'decision_tree':
+            config = node.data.get('config', {})
+            tree_nodes_raw = config.get('tree_nodes', '[]')
+            root_node_id = config.get('root_node_id', 'root')
+            default_value = config.get('default_value', '')
+            default_result_variable = config.get('default_result_variable', 'decision_tree_result')
+            max_depth = config.get('max_depth', 20)
+            supported_operators_raw = config.get('supported_operators', '[]')
+
+            try:
+                tree_nodes = json.loads(tree_nodes_raw) if isinstance(tree_nodes_raw, str) else tree_nodes_raw
+            except Exception:
+                tree_nodes = []
+            try:
+                supported_operators = json.loads(supported_operators_raw) if isinstance(supported_operators_raw, str) else supported_operators_raw
+            except Exception:
+                supported_operators = []
+
+            node_map = {n['id']: n for n in tree_nodes}
+
+            op_map = {'大于等于': '>=', '小于等于': '<=', '等于': '==', '大于': '>', '小于': '<', '不等于': '!='}
+
+            def evaluate_tree_node(tn, depth=0):
+                if depth > max_depth:
+                    return default_value, default_result_variable
+                node_type_inner = tn.get('type', 'action')
+                if node_type_inner == 'action':
+                    result_val = tn.get('result_value', default_value)
+                    result_var = tn.get('result_variable', default_result_variable)
+                    result_source = tn.get('result_source', '固定值')
+                    if result_source == '引用变量':
+                        result_val = context.get(result_val, result_val)
+                    elif result_source == '表达式':
+                        def replace_tree_var(match):
+                            vn = match.group(1)
+                            vv = context.get(vn, '')
+                            if isinstance(vv, str):
+                                return f'"{vv}"'
+                            return str(vv)
+                        resolved = re.sub(r'\$\{(\w+)\}', replace_tree_var, str(result_val))
+                        try:
+                            result_val = simple_eval(resolved)
+                        except Exception:
+                            pass
+                    return result_val, result_var
+
+                # condition node
+                variable = tn.get('variable', '')
+                operator_cn = tn.get('operator', '等于')
+                value_source = tn.get('value_source', '固定值')
+                value = tn.get('value', '')
+                true_child = tn.get('true_child', '')
+                false_child = tn.get('false_child', '')
+
+                context_val = context.get(variable)
+                if context_val is None:
+                    return default_value, default_result_variable
+
+                # Resolve comparison value
+                if value_source == '引用变量':
+                    cmp_val = context.get(value, value)
+                else:
+                    cmp_val = value
+
+                op_py = op_map.get(operator_cn, '==')
+
+                try:
+                    try:
+                        cmp_v = float(cmp_val)
+                        ctx_v = float(context_val)
+                    except (ValueError, TypeError):
+                        cmp_v = str(cmp_val)
+                        ctx_v = str(context_val)
+                    eval_result = simple_eval(f'{repr(ctx_v)} {op_py} {repr(cmp_v)}')
+                except Exception:
+                    eval_result = False
+
+                next_id = true_child if eval_result else false_child
+                if not next_id:
+                    return default_value, default_result_variable
+                next_node = node_map.get(next_id)
+                if next_node is None:
+                    return default_value, default_result_variable
+                return evaluate_tree_node(next_node, depth + 1)
+
+            root = node_map.get(root_node_id)
+            if root is None:
+                tree_result = default_value
+                result_var = default_result_variable
+            else:
+                tree_result, result_var = evaluate_tree_node(root)
+
+            context[result_var] = tree_result
+            context['decision_tree_result'] = tree_result
+
+            return {'step': len(context.keys()), 'node': node.data.get('label', '决策树'),
+                    'status': 'success',
+                    'input': f'root={root_node_id}, {len(tree_nodes)} nodes',
+                    'output': f'{result_var}={tree_result}'}
 
         elif node_type == 'end':
             return {'step': len(context.keys()), 'node': node.data.get('label', '结束'),

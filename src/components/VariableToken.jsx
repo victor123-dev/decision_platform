@@ -15,12 +15,16 @@ export default function VariableToken({
   className = '',
   onClick,
   showPath = true,
+  showIndices = false,
 }) {
   const displayLabel = label || variable?.name || variable?.symbol || '';
   const colorClass = getVariableColorClass(variable);
   const path = showPath ? getOntologyPath(variable, { ontologyName }) : '';
   const clickable = typeof onClick === 'function';
   const hasRef = hasOntologyRef(variable);
+
+  const indices = variable?.indices || [];
+  const hasIndices = showIndices && indices.length > 0 && variable?.dimension !== '0D';
 
   const [showTooltip, setShowTooltip] = useState(false);
   const tooltipRef = useRef(null);
@@ -56,6 +60,11 @@ export default function VariableToken({
     >
       {hasRef && <span className="variable-token-dot" />}
       {displayLabel}
+      {hasIndices && (
+        <span className="text-[10px] text-slate-400 font-mono ml-0.5">
+          [{indices.map(idx => typeof idx === 'string' ? idx : idx.alias).join(',')}]
+        </span>
+      )}
 
       {/* Hover 气泡：展示变量详细信息 */}
       {showTooltip && variable && (
@@ -83,6 +92,15 @@ export default function VariableToken({
               )}
               {path && (
                 <tr><td className="vt-label">本体路径</td><td className="vt-value vt-mono vt-path">{path}</td></tr>
+              )}
+              {indices.length > 0 && variable?.dimension !== '0D' && (
+                <tr>
+                  <td className="vt-label">索引下标</td>
+                  <td className="vt-value vt-mono">
+                    {indices.map(idx => typeof idx === 'string' ? idx : idx.alias).join(', ')}
+                    <span className="text-slate-400 ml-1">({variable.dimension})</span>
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>

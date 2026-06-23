@@ -11,6 +11,8 @@ from datetime import datetime
 
 from app.database.sqlite_client import SessionLocal, Base, engine
 from app.database.sqlite_models import OptimizationModelDB
+from app.services.solver_adapters import SolverAdapterFactory
+from app.services.code_generators import CodeGeneratorFactory
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,19 @@ with engine.connect() as conn:
         conn.commit()
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
+
+# 迁移：为 optimization_models 添加新字段（幂等）
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE optimization_models ADD COLUMN algorithm_config TEXT"))
+        conn.commit()
+    except Exception:
+        pass  # 字段已存在
+    try:
+        conn.execute(text("ALTER TABLE optimization_models ADD COLUMN solver_config TEXT"))
+        conn.commit()
+    except Exception:
+        pass  # 字段已存在
 
 router = APIRouter()
 
@@ -53,17 +68,20 @@ class OptimizationModel(BaseModel):
     id: Optional[str] = Field(None, description="模型唯一标识")
     name: str = Field(description="模型名称")
     description: Optional[str] = Field("", description="描述")
-    problem_type: str = Field(description="问题类型", pattern="^(LP|MIP|QP)$")
+    problem_type: str = Field(description="问题类型", pattern="^(LP|MIP|CP_SAT)$")
     status: Optional[str] = Field("draft", description="状态")
     objective: OptimizationObjective = Field(description="目标函数")
     variables: List[OptimizationVariable] = Field(default_factory=list)
     constraints: List[OptimizationConstraint] = Field(default_factory=list)
+    algorithm_config: Optional[Dict[str, Any]] = Field(None, description="算法特定配置(CP-SAT)")
+    solver_config: Optional[Dict[str, Any]] = Field(None, description="求解器参数配置")
 
 class OptimizationResult(BaseModel):
     model_id: str = Field(description="模型ID")
     status: str = Field(description="求解状态")
     objective_value: Optional[float] = Field(None, description="目标函数值")
-    solution: Dict[str, float] = Field(default_factory=dict, description="变量解")
+    solution: Dict[str, float] = Field(default_factory=dict, description="变量解（扁平，向后兼容）")
+    solutionDetails: Optional[List[Dict[str, Any]]] = Field(None, description="结构化变量解（含维度索引）")
     solve_time: float = Field(description="求解时间(秒)")
     iterations: int = Field(description="迭代次数")
 
@@ -71,6 +89,18 @@ class OptimizationResult(BaseModel):
 
 def db_to_api(db_model: OptimizationModelDB) -> OptimizationModel:
     """将SQLite模型转换为API模型"""
+    algorithm_config = None
+    if db_model.algorithm_config:
+        try:
+            algorithm_config = json.loads(db_model.algorithm_config)
+        except Exception:
+            algorithm_config = None
+    solver_config = None
+    if db_model.solver_config:
+        try:
+            solver_config = json.loads(db_model.solver_config)
+        except Exception:
+            solver_config = None
     return OptimizationModel(
         id=db_model.id,
         name=db_model.name,
@@ -82,7 +112,9 @@ def db_to_api(db_model: OptimizationModelDB) -> OptimizationModel:
             expression=db_model.objective_expression or ""
         ),
         variables=[OptimizationVariable(**v) for v in json.loads(db_model.variables or "[]")],
-        constraints=[OptimizationConstraint(**c) for c in json.loads(db_model.constraints or "[]")]
+        constraints=[OptimizationConstraint(**c) for c in json.loads(db_model.constraints or "[]")],
+        algorithm_config=algorithm_config,
+        solver_config=solver_config,
     )
 
 
@@ -98,6 +130,8 @@ def api_to_db(model: OptimizationModel) -> OptimizationModelDB:
         objective_expression=model.objective.expression if model.objective else None,
         variables=json.dumps([v.model_dump() for v in (model.variables or [])]),
         constraints=json.dumps([c.model_dump() for c in (model.constraints or [])]),
+        algorithm_config=json.dumps(model.algorithm_config) if model.algorithm_config else None,
+        solver_config=json.dumps(model.solver_config) if model.solver_config else None,
     )
 
 
@@ -222,6 +256,10 @@ async def update_model(model_id: str, model: OptimizationModel, db: Session = De
     db_model.objective_expression = model.objective.expression if model.objective else None
     db_model.variables = json.dumps([v.model_dump() for v in (model.variables or [])])
     db_model.constraints = json.dumps([c.model_dump() for c in (model.constraints or [])])
+    if model.algorithm_config is not None:
+        db_model.algorithm_config = json.dumps(model.algorithm_config)
+    if model.solver_config is not None:
+        db_model.solver_config = json.dumps(model.solver_config)
     db_model.updated_at = datetime.now()
 
     db.commit()
@@ -297,14 +335,57 @@ async def solve_model(model_id: str, db: Session = Depends(get_db)):
         import time
         start_time = time.time()
 
+        problem_type = model.problem_type
+
+        if problem_type == "CP_SAT":
+            # CP-SAT 路径 - 根据求解策略选择适配器
+            algorithm_config = json.loads(db_model.algorithm_config or "{}")
+            solver_config = json.loads(db_model.solver_config or "{}")
+            solving_strategy = solver_config.get("solvingStrategy", "exact")
+            adapter = SolverAdapterFactory.create(problem_type, solving_strategy)
+
+            model_data = {
+                "intVars": algorithm_config.get("intVars", []),
+                "boolVars": algorithm_config.get("boolVars", []),
+                "intervalVars": algorithm_config.get("intervalVars", []),
+                "linearConstraints": algorithm_config.get("linearConstraints", []),
+                "globalConstraints": algorithm_config.get("globalConstraints", []),
+                "objective": algorithm_config.get("objective"),
+            }
+
+            result = adapter.solve(model_data, solver_config)
+            solve_time = time.time() - start_time
+
+            # 更新模型状态
+            db_model.status = "solved"
+            db_model.updated_at = datetime.now()
+            db.commit()
+
+            return OptimizationResult(
+                model_id=model_id,
+                status=result.get("status", "unknown"),
+                objective_value=result.get("objective_value"),
+                solution=result.get("solution", {}),
+                solve_time=result.get("solve_time", solve_time),
+                iterations=0
+            )
+
+        # LP/MIP 路径 - 根据问题类型自动选择求解器
         var_indices = {v.name: i for i, v in enumerate(model.variables)}
 
         # 创建 OR-Tools 求解器
-        solver = pywraplp.Solver.CreateSolver('SCIP')
-        if not solver:
-            solver = pywraplp.Solver.CreateSolver('CBC')
-        if not solver:
-            raise RuntimeError('无法创建 OR-Tools 求解器 (SCIP/CBC)')
+        if model.problem_type == "LP":
+            solver = pywraplp.Solver.CreateSolver('GLOP')
+            if not solver:
+                solver = pywraplp.Solver.CreateSolver('SCIP')
+            if not solver:
+                raise RuntimeError('无法创建 OR-Tools LP 求解器 (GLOP/SCIP)')
+        else:
+            solver = pywraplp.Solver.CreateSolver('SCIP')
+            if not solver:
+                solver = pywraplp.Solver.CreateSolver('CBC')
+            if not solver:
+                raise RuntimeError('无法创建 OR-Tools MIP 求解器 (SCIP/CBC)')
 
         # 创建变量
         vars_list = []
@@ -384,6 +465,53 @@ async def solve_model(model_id: str, db: Session = Depends(get_db)):
 
     except Exception as e:
         logger.error(f"Error solving model {model_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Code Generation Endpoint ---
+
+@router.post("/{model_id}/generate-code", tags=["优化求解模型"])
+async def generate_code(model_id: str, db: Session = Depends(get_db)):
+    """为模型生成可执行的 OR-Tools Python 代码"""
+    db_model = db.query(OptimizationModelDB).filter(OptimizationModelDB.id == model_id).first()
+    if not db_model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    model = db_to_api(db_model)
+    problem_type = model.problem_type
+
+    try:
+        generator = CodeGeneratorFactory.create(problem_type)
+
+        if problem_type in ("LP", "MIP"):
+            model_data = {
+                "name": model.name,
+                "variables": [v.model_dump() for v in model.variables],
+                "objective": model.objective.model_dump() if model.objective else {},
+                "constraints": [c.model_dump() for c in model.constraints],
+            }
+        elif problem_type == "CP_SAT":
+            algorithm_config = json.loads(db_model.algorithm_config or "{}")
+            solver_config = json.loads(db_model.solver_config or "{}")
+            model_data = {
+                "name": model.name,
+                "problemType": "CP_SAT",
+                "intVars": algorithm_config.get("intVars", []),
+                "boolVars": algorithm_config.get("boolVars", []),
+                "intervalVars": algorithm_config.get("intervalVars", []),
+                "linearConstraints": algorithm_config.get("linearConstraints", []),
+                "globalConstraints": algorithm_config.get("globalConstraints", []),
+                "objective": algorithm_config.get("objective"),
+                "cpsatConfig": solver_config,
+            }
+        else:
+            model_data = {"name": model.name}
+
+        code = generator.generate(model_data)
+        return {"code": code, "problem_type": problem_type}
+
+    except Exception as e:
+        logger.error(f"Error generating code for model {model_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -11,19 +11,29 @@ import { Copy, CheckCircle, RefreshCw } from 'lucide-react';
 export default function DslViewPanel({ variables, objectives, constraints, problemType, modelName, orDsl }) {
   const [copied, setCopied] = useState(false);
 
-  /** 构建变量名映射 varId → 英文名 */
-  const varMap = useMemo(() => {
+  /** 构建变量信息映射 varId → { name, indices } */
+  const varInfoMap = useMemo(() => {
     const map = {};
-    variables.forEach(v => { map[v.id] = v.nameEn || v.name; });
+    variables.forEach(v => {
+      map[v.id] = {
+        name: v.nameEn || v.name,
+        indices: v.indices || []
+      };
+    });
     return map;
   }, [variables]);
 
-  /** 将 coefficients 字典转为可读表达式字符串 */
+  /** 将 coefficients 字典转为可读表达式字符串，多维变量带索引下标 */
   const buildExpr = useCallback((coefficients) => {
     const parts = [];
     for (const [varId, coeff] of Object.entries(coefficients || {})) {
       if (coeff === 0 || coeff === null || coeff === undefined) continue;
-      const name = varMap[varId] || varId;
+      const info = varInfoMap[varId];
+      const baseName = info?.name || varId;
+      const suffix = info?.indices?.length
+        ? `[${info.indices.map(idx => typeof idx === 'string' ? idx : idx.alias).join(',')}]`
+        : '';
+      const name = `${baseName}${suffix}`;
       if (typeof coeff === 'string') {
         parts.push(coeff.startsWith('$') ? `${coeff}*${name}` : `${coeff}*${name}`);
         continue;
@@ -33,7 +43,7 @@ export default function DslViewPanel({ variables, objectives, constraints, probl
       else parts.push(`${coeff}*${name}`);
     }
     return parts.join(' + ').replace(/\+ -/g, '- ') || '0';
-  }, [varMap]);
+  }, [varInfoMap]);
 
   /**
    * 核心：同步生成 DSL 中间表示
@@ -51,12 +61,36 @@ export default function DslViewPanel({ variables, objectives, constraints, probl
     return {
       problemType: problemType || 'LP',
       name: modelName || 'Untitled',
-      variables: variables.map(v => ({
-        symbol: v.nameEn || v.name,
-        name: v.name,
-        domain: v.type || 'continuous',
-        bounds: { lower: v.lowerBound ?? 0, upper: v.upperBound ?? null },
-      })),
+      variables: variables.map(v => {
+        const dslVar = {
+          symbol: v.nameEn || v.name,
+          name: v.name,
+          domain: v.type || 'continuous',
+          bounds: { lower: v.lowerBound ?? 0, upper: v.upperBound ?? null },
+        };
+        // 添加维度信息
+        if (v.dimension) {
+          dslVar.dimension = v.dimension;
+        }
+        // 添加索引信息（非0D变量）
+        if (v.dimension && v.dimension !== '0D' && v.indices && v.indices.length > 0) {
+          dslVar.indices = v.indices.map(idx => {
+            const entry = { symbol: typeof idx === 'string' ? idx : idx.alias };
+            if (idx.businessMeaning) entry.businessMeaning = idx.businessMeaning;
+            // 从 indexMapping 获取本体绑定信息
+            const mapping = (v.indexMapping || []).find(m => m.alias === entry.symbol);
+            if (mapping && mapping.objectTypeId) {
+              entry.ontologyBinding = {
+                object: idx.objectTypeDisplayName || mapping.objectTypeId,
+                property: mapping.propertyId || ''
+              };
+            }
+            return entry;
+          });
+        }
+        if (v.businessMeaning) dslVar.businessMeaning = v.businessMeaning;
+        return dslVar;
+      }),
       objectives: (objectives || []).map(o => ({
         name: o.name,
         sense: o.sense,

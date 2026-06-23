@@ -76,6 +76,8 @@ class OptimizationModelDB(Base):
     objective_expression = Column(Text)
     variables = Column(Text)  # JSON
     constraints = Column(Text)  # JSON
+    algorithm_config = Column(Text)  # JSON: CP-SAT 的变量/约束/全局约束配置
+    solver_config = Column(Text)     # JSON: 求解器参数 (时间限制/线程数/搜索策略)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

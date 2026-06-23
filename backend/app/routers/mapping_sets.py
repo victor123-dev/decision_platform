@@ -73,6 +73,7 @@ class VariableIndex(BaseModel):
     setName: Optional[str] = Field(None, description="集合名称")
     objectTypeId: Optional[str] = Field(None, description="本体对象类型ID")
     objectTypeDisplayName: Optional[str] = Field(None, description="本体对象类型显示名")
+    businessMeaning: Optional[str] = Field(None, description="索引代表的业务涵义")
 
 
 class OntologyRef(BaseModel):
@@ -95,6 +96,7 @@ class IndexMapping(BaseModel):
     propertyId: Optional[str] = Field(None, description="本体属性ID")
     setName: Optional[str] = Field(None, description="集合名称")
     role: Optional[str] = Field(None, description="索引角色说明，如'被分配对象'、'执行资源'")
+    businessMeaning: Optional[str] = Field(None, description="索引代表的业务涵义")
 
 
 class DecisionVariable(BaseModel):

@@ -52,6 +52,22 @@ ACTION_KEYWORDS = {
     "最大化": ["最大化", "最大", "提高", "增加", "优化利润"],
 }
 
+# 本体对象主键属性映射表
+OBJECT_PRIMARY_KEYS = {
+    "obj-supplier": "supplier_id",
+    "obj-customer": "customer_id",
+    "obj-material": "material_id",
+    "obj-work-order": "work_order_id",
+    "obj-product": "product_id",
+    "obj-risk": "risk_id",
+    "obj-inventory": "inventory_id",
+    "obj-machine": "machine_id",
+    "obj-task": "task_id",
+    "obj-logistics": "logistics_id",
+    "obj-warehouse": "name",
+    "obj-order": "order_no",
+}
+
 # 常见业务字段与属性的映射
 FIELD_KEYWORDS = {
     "数量": ["数量", "产量", "批量", "订货量"],
@@ -393,8 +409,20 @@ class StructuredModelingService:
   "relations": ["关系描述1", "关系描述2"],
   "fields": ["字段1", "字段2"],
   "objective_hint": "用户隐含的优化目标描述",
-  "business_summary": "业务需求一句话总结"
+  "business_summary": "业务需求一句话总结",
+  "variables_hint": [
+    {{
+      "name": "变量中文名",
+      "symbol": "变量符号（如x_ij）",
+      "dimension": "1D或2D或3D或scalar",
+      "indices": [
+        {{"alias": "i", "businessMeaning": "索引i的业务含义（如工单编号）", "objectTypeId": "对应本体ID（如obj-work-order）", "propertyId": "主键属性（如work_order_id）"}}
+      ]
+    }}
+  ]
 }}
+
+说明：variables_hint 用于描述核心决策变量的维度信息。例如"每个工单的开始时间"是1D变量（索引i=工单），"工单分配到机台"是2D变量（索引i=工单，j=机台）。
 
 业务描述：{user_input}"""
 
@@ -414,6 +442,7 @@ class StructuredModelingService:
         entities.setdefault("fields", [])
         entities.setdefault("objective_hint", "")
         entities.setdefault("business_summary", user_input[:80])
+        entities.setdefault("variables_hint", [])
 
         # 将识别出的文本映射到标准 objectTypeId
         entities["objectTypeIds"] = self._map_objects_to_ids(entities.get("objects", []))
@@ -687,14 +716,21 @@ class StructuredModelingService:
             "summary": f"识别到 {len(coefficients)} 个系数/参数",
         }
 
-    def confirm_variables(self, matched_vars: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def confirm_variables(self, matched_vars: List[Dict[str, Any]], user_input: str = "") -> Dict[str, Any]:
         """
         Step 3: 确认决策变量
-        将匹配到的变量转换为前端可编辑格式，保留本体引用路径信息
+        将匹配到的变量转换为前端可编辑格式，保留本体引用路径信息，并推断维度和索引
         """
         variables = []
         for idx, v in enumerate(matched_vars):
             ontology_ref = self._build_ontology_ref(v)
+            # 维度推断：用变量的 businessMeaning/name/symbol 结合用户原始输入
+            var_desc = " ".join(filter(None, [
+                v.get("businessMeaning", ""),
+                v.get("name", ""),
+                v.get("symbol", ""),
+            ]))
+            dim_info = self._infer_variable_dimension(var_desc, user_input)
             variables.append({
                 "id": v.get("id", f"v-{idx + 1}"),
                 "name": v.get("name", v.get("symbol", f"变量{idx + 1}")),
@@ -707,6 +743,8 @@ class StructuredModelingService:
                 "ontologyRef": ontology_ref,
                 "ontologyPath": self._build_ontology_path(ontology_ref),
                 "source": v.get("_sourceScenario", "AI匹配"),
+                "dimension": dim_info["dimension"],
+                "indices": dim_info["indices"],
             })
 
         return {
@@ -841,7 +879,7 @@ class StructuredModelingService:
     def build_model_draft_legacy(self, entities: Dict[str, Any], matched_vars: List[Dict[str, Any]],
                                  matched_cons: List[Dict[str, Any]], user_input: str) -> Dict[str, Any]:
         """旧版直接生成草案（兼容非流式调用）"""
-        variables = self.confirm_variables(matched_vars)["variables"]
+        variables = self.confirm_variables(matched_vars, user_input)["variables"]
         constraints = self.confirm_constraints(matched_cons, variables)["constraints"]
         objective = self.confirm_objective(entities, variables)["objective"]
         coefficients = self.identify_coefficients(entities, matched_vars, matched_cons, user_input)["coefficients"]
@@ -898,6 +936,137 @@ class StructuredModelingService:
     # ═══════════════════════════════════════════════════════════════════════
     # 工具方法
     # ═══════════════════════════════════════════════════════════════════════
+
+    def _infer_variable_dimension(self, var_text: str, user_input: str = "") -> Dict[str, Any]:
+        """
+        从变量的业务描述或用户原始输入中推断维度和索引信息。
+
+        返回结构：
+        {
+            "dimension": "1D" | "2D" | "3D" | "scalar",
+            "indices": [
+                {
+                    "alias": "i",
+                    "businessMeaning": "工单编号",
+                    "objectTypeId": "obj-work-order",
+                    "propertyId": "work_order_id"
+                },
+                ...
+            ]
+        }
+        """
+        combined = f"{var_text} {user_input}".strip()
+
+        # ── 1. 显式索引声明：X[i]、X[i,j]、X[i,j,k] ──
+        explicit = re.search(r'[A-Za-z_][\w]*\s*\[([ijk,\s]+)\]', combined)
+        if explicit:
+            raw_indices = [s.strip() for s in explicit.group(1).split(',') if s.strip()]
+            dim = len(raw_indices)
+            dimension = f"{dim}D" if dim <= 3 else f"{dim}D"
+            indices = [{"alias": a, "businessMeaning": "", "objectTypeId": "", "propertyId": ""}
+                       for a in raw_indices[:3]]
+            return {"dimension": dimension, "indices": indices}
+
+        # ── 2. 三维：「在XX j上 YY i 是否在 ZZ k 之前」等三对象组合 ──
+        three_d_patterns = [
+            r'(在.{1,6}[ijk]上.{0,10}[ijk].{0,10}在.{1,6}[ijk])',
+            r'(\S+)[到分配运送](\S+)(的\S+)(在|上|经过)(\S+)',
+        ]
+        obj_matches_3d = []
+        for pat in three_d_patterns:
+            if re.search(pat, combined):
+                # 尝试提取三个对象
+                objs = self._match_objects_in_text(combined)
+                if len(objs) >= 3:
+                    obj_matches_3d = objs[:3]
+                    break
+        if len(obj_matches_3d) == 3:
+            indices = [
+                self._build_index_entry(alias, obj)
+                for alias, obj in zip(["i", "j", "k"], obj_matches_3d)
+            ]
+            return {"dimension": "3D", "indices": indices}
+
+        # ── 3. 二维：「XX 到/分配到/运送到 YY 的 ZZ」/ 「XX 和 YY 的」 ──
+        two_d_patterns = [
+            r'([\u4e00-\u9fa5]{1,6})(到|分配到|运送到|派发到|配送到|指派到)([\u4e00-\u9fa5]{1,6})',
+            r'([\u4e00-\u9fa5]{1,6})与([\u4e00-\u9fa5]{1,6})之间',
+            r'([\u4e00-\u9fa5]{1,6})在([\u4e00-\u9fa5]{1,6})上的',
+        ]
+        for pat in two_d_patterns:
+            m = re.search(pat, combined)
+            if m:
+                # 尝试从捕获组1、3（或1、2）提取两个业务对象
+                objs = self._match_objects_in_text(combined)
+                if len(objs) >= 2:
+                    indices = [
+                        self._build_index_entry("i", objs[0]),
+                        self._build_index_entry("j", objs[1]),
+                    ]
+                    return {"dimension": "2D", "indices": indices}
+
+        # ── 4. 一维：「每个 XX 的 YY」/ 「各 XX 的 YY」 ──
+        one_d_patterns = [
+            r'每个?([\u4e00-\u9fa5]{1,8})的',
+            r'各([\u4e00-\u9fa5]{1,8})的',
+            r'每条([\u4e00-\u9fa5]{1,8})的',
+        ]
+        for pat in one_d_patterns:
+            m = re.search(pat, combined)
+            if m:
+                candidate = m.group(1)
+                obj = self._find_ontology_object_by_text(candidate)
+                if obj:
+                    indices = [self._build_index_entry("i", obj)]
+                    return {"dimension": "1D", "indices": indices}
+
+        # ── 5. 从文本中匹配到至少一个业务对象视为 1D ──
+        objs = self._match_objects_in_text(combined)
+        if len(objs) >= 2:
+            indices = [
+                self._build_index_entry("i", objs[0]),
+                self._build_index_entry("j", objs[1]),
+            ]
+            return {"dimension": "2D", "indices": indices}
+        if len(objs) == 1:
+            indices = [self._build_index_entry("i", objs[0])]
+            return {"dimension": "1D", "indices": indices}
+
+        return {"dimension": "scalar", "indices": []}
+
+    def _match_objects_in_text(self, text: str) -> List[Dict[str, Any]]:
+        """从文本中按顺序匹配本体对象，返回匹配到的对象信息列表"""
+        matched = []
+        seen_ids = set()
+        for ot in ONTOLOGY_OBJECT_TYPES:
+            for kw in ot["keywords"]:
+                if kw in text and ot["id"] not in seen_ids:
+                    seen_ids.add(ot["id"])
+                    matched.append(ot)
+                    break
+        return matched
+
+    def _find_ontology_object_by_text(self, text: str) -> Optional[Dict[str, Any]]:
+        """通过文本片段查找最匹配的本体对象"""
+        for ot in ONTOLOGY_OBJECT_TYPES:
+            if ot["displayName"] in text:
+                return ot
+            for kw in ot["keywords"]:
+                if kw in text:
+                    return ot
+        return None
+
+    def _build_index_entry(self, alias: str, obj: Dict[str, Any]) -> Dict[str, Any]:
+        """根据本体对象构建索引条目"""
+        obj_id = obj.get("id", "")
+        property_id = OBJECT_PRIMARY_KEYS.get(obj_id, "id")
+        display_name = obj.get("displayName", obj.get("name", ""))
+        return {
+            "alias": alias,
+            "businessMeaning": f"{display_name}编号" if not display_name.endswith(("编号", "号")) else display_name,
+            "objectTypeId": obj_id,
+            "propertyId": property_id,
+        }
 
     def _build_ontology_ref(self, variable: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """从变量定义中提取本体引用"""

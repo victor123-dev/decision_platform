@@ -9,6 +9,90 @@ import AIAgentChat from '../components/AIAgentChat';
 import OntologyModelMappingModal from '../components/OntologyModelMappingModal';
 import DslViewPanel from '../components/DslViewPanel';
 import PythonViewPanel from '../components/PythonViewPanel';
+import { optimizationTestModels } from '../data/optimizationTestModels';
+
+const MOCK_ONTOLOGIES = [
+  {
+    id: 'ont-supply-chain-control-tower',
+    name: '供应链控制塔',
+    description: '供应链全链路语义模型',
+    object_types: [
+      {
+        id: 'obj-material',
+        name: 'Material',
+        display_name: '物料',
+        description: '生产所需的原材料和辅料',
+        properties: [
+          { name: 'material_id', type: 'string', description: '物料ID' },
+          { name: 'material_name', type: 'string', description: '物料名称' },
+          { name: 'material_type', type: 'string', description: '物料类型' },
+          { name: 'unit_price', type: 'number', description: '单价' },
+          { name: 'stock_qty', type: 'number', description: '库存数量' },
+          { name: 'supplier_id', type: 'string', description: '供应商ID' },
+        ],
+      },
+      {
+        id: 'obj-warehouse',
+        name: 'Warehouse',
+        display_name: '仓库',
+        description: '仓储设施',
+        properties: [
+          { name: 'warehouse_id', type: 'string', description: '仓库ID' },
+          { name: 'name', type: 'string', description: '仓库名称' },
+          { name: 'capacity', type: 'number', description: '容量' },
+          { name: 'location', type: 'string', description: '位置' },
+        ],
+      },
+      {
+        id: 'obj-supplier',
+        name: 'Supplier',
+        display_name: '供应商',
+        description: '提供物料或服务的外部供应商',
+        properties: [
+          { name: 'supplier_id', type: 'string', description: '供应商ID' },
+          { name: 'name', type: 'string', description: '供应商名称' },
+          { name: 'location', type: 'string', description: '所在地' },
+          { name: 'risk_level', type: 'string', description: '风险等级' },
+        ],
+      },
+      {
+        id: 'obj-product',
+        name: 'Product',
+        display_name: '产品',
+        description: '生产的成品或半成品',
+        properties: [
+          { name: 'product_id', type: 'string', description: '产品ID' },
+          { name: 'product_name', type: 'string', description: '产品名称' },
+          { name: 'category', type: 'string', description: '产品类别' },
+        ],
+      },
+      {
+        id: 'obj-order',
+        name: 'Order',
+        display_name: '订单',
+        description: '客户下达的采购订单',
+        properties: [
+          { name: 'order_id', type: 'string', description: '订单ID' },
+          { name: 'order_no', type: 'string', description: '订单编号' },
+          { name: 'amount', type: 'number', description: '订单金额' },
+          { name: 'status', type: 'string', description: '订单状态' },
+        ],
+      },
+      {
+        id: 'obj-work-order',
+        name: 'WorkOrder',
+        display_name: '工单',
+        description: '生产工单',
+        properties: [
+          { name: 'work_order_id', type: 'string', description: '工单ID' },
+          { name: 'product_id', type: 'string', description: '产品ID' },
+          { name: 'status', type: 'string', description: '工单状态' },
+          { name: 'planned_quantity', type: 'number', description: '计划数量' },
+        ],
+      },
+    ],
+  },
+];
 
 const STATUS_BADGE = {
   active: 'bg-green-100 text-green-700',
@@ -45,6 +129,8 @@ export default function OptimizationModelEditor() {
 
   const isNew = id === 'new';
 
+  const [isFromMock, setIsFromMock] = useState(false);
+
   const [modelName, setModelName] = useState('新建优化模型');
   const [modelDescription, setModelDescription] = useState('');
   const [modelStatus, setModelStatus] = useState('draft');
@@ -52,6 +138,23 @@ export default function OptimizationModelEditor() {
   const [objectives, setObjectives] = useState([{ id: 'obj-1', name: '目标函数', sense: 'maximize', coefficients: {} }]);
   const [constraints, setConstraints] = useState([]);
   const [problemType, setProblemType] = useState('LP');
+
+  // CP-SAT 专用状态
+  const [intVars, setIntVars] = useState([]);
+  const [boolVars, setBoolVars] = useState([]);
+  const [intervalVars, setIntervalVars] = useState([]);
+  const [cpLinearConstraints, setCpLinearConstraints] = useState([]);
+  const [globalConstraints, setGlobalConstraints] = useState([]);
+  const [cpsatObjective, setCpsatObjective] = useState({ sense: 'minimize', coefficients: {} });
+  const [solverConfig, setSolverConfig] = useState({
+    solvingStrategy: 'exact',
+    timeLimitSeconds: 60,
+    mipGap: 0.001,
+    numWorkers: 4,
+    searchStrategy: 'automatic',
+    solutionCount: 1,
+  });
+
   const [saving, setSaving] = useState(false);
   const [solving, setSolving] = useState(false);
   const [solveResult, setSolveResult] = useState(null);
@@ -74,8 +177,19 @@ export default function OptimizationModelEditor() {
 
   useEffect(() => {
     api.get('/ontology/')
-      .then(data => setOntologies(data || []))
-      .catch(err => console.error('加载本体数据失败:', err));
+      .then(data => {
+        const result = data || [];
+        if (result.length === 0) {
+          console.log('使用 Mock 本体数据');
+          setOntologies(MOCK_ONTOLOGIES);
+        } else {
+          setOntologies(result);
+        }
+      })
+      .catch(err => {
+        console.error('加载本体数据失败，使用 Mock 数据:', err);
+        setOntologies(MOCK_ONTOLOGIES);
+      });
   }, []);
 
   // 监听本体-模型映射模态框关闭事件
@@ -88,50 +202,32 @@ export default function OptimizationModelEditor() {
   useEffect(() => {
     if (isNew) return;
     setLoading(true);
+    
+    const mockModel = optimizationTestModels.find(m => m.id === id);
+    
+    if (mockModel) {
+      const data = {
+        ...mockModel,
+        problem_type: mockModel.problemType === 'IP' ? 'MIP' : mockModel.problemType,
+        algorithm_config: {
+          int_vars: mockModel.intVars,
+          bool_vars: mockModel.boolVars,
+          interval_vars: mockModel.intervalVars,
+          linear_constraints: mockModel.linearConstraints,
+          global_constraints: mockModel.globalConstraints,
+          objective: mockModel.objective,
+        },
+      };
+      handleModelData(data);
+      setIsFromMock(true);
+      setLoading(false);
+      return;
+    }
+    
     api.get(`/optimization/${id}`)
       .then(data => {
         if (!data) { setNotFound(true); return; }
-        setModelName(data.name || '');
-        setModelDescription(data.description || '');
-        setModelStatus(data.status || 'draft');
-        setProblemType(data.problem_type || 'LP');
-        setVariables((data.variables || []).map(v => ({
-          id: v.id,
-          name: v.name,
-          nameEn: v.nameEn || v.name_en || '',
-          type: v.type || 'continuous',
-          lowerBound: v.lower_bound ?? 0,
-          upperBound: v.upper_bound ?? null,
-          ontologyRef: v.ontology_ref || v.ontologyRef,
-          ontologyPath: v.ontology_path || v.ontologyPath,
-          nature: v.nature || '',
-          dimension: v.dimension || '',
-          domain: v.domain || '',
-          businessMeaning: v.business_meaning || v.businessMeaning || '',
-          unit: v.unit || '',
-        })));
-        if (data.objectives && data.objectives.length > 0) {
-          setObjectives(data.objectives.map((o, i) => ({
-            id: o.id || `obj-${i + 1}`,
-            name: o.name || `目标函数${i + 1}`,
-            sense: o.sense || 'maximize',
-            coefficients: parseExpressionToCoefficients(o.expression || '', data.variables || []),
-          })));
-        } else if (data.objective) {
-          setObjectives([{
-            id: 'obj-1',
-            name: '目标函数',
-            sense: data.objective.sense || 'maximize',
-            coefficients: parseExpressionToCoefficients(data.objective.expression || '', data.variables || []),
-          }]);
-        }
-        setConstraints((data.constraints || []).map(c => ({
-          id: c.id,
-          name: c.name,
-          coefficients: parseExpressionToCoefficients(c.expression || '', data.variables || []),
-          sense: c.sense,
-          rhs: c.rhs,
-        })));
+        handleModelData(data);
       })
       .catch(err => {
         console.error('加载模型失败:', err);
@@ -139,6 +235,67 @@ export default function OptimizationModelEditor() {
       })
       .finally(() => setLoading(false));
   }, [id, isNew]);
+
+  function handleModelData(data) {
+    setModelName(data.name || '');
+    setModelDescription(data.description || '');
+    setModelStatus(data.status || 'draft');
+    setProblemType(data.problem_type || 'LP');
+    
+    if (data.problem_type === 'CP_SAT' && data.algorithm_config) {
+      const ac = data.algorithm_config;
+      if (ac.int_vars) setIntVars(ac.int_vars.map(v => ({ ...v, id: v.id || `iv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` })));
+      if (ac.bool_vars) setBoolVars(ac.bool_vars.map(v => ({ ...v, id: v.id || `bv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` })));
+      if (ac.interval_vars) setIntervalVars(ac.interval_vars.map(v => ({ ...v, id: v.id || `itv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` })));
+      if (ac.linear_constraints) setCpLinearConstraints(ac.linear_constraints.map(c => ({ ...c, id: c.id || `lc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` })));
+      if (ac.global_constraints) setGlobalConstraints(ac.global_constraints.map(c => ({ ...c, id: c.id || `gc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` })));
+      if (ac.objective) setCpsatObjective(ac.objective);
+    }
+    if (data.solver_config) {
+      setSolverConfig(prev => ({ ...prev, ...data.solver_config }));
+    }
+    
+    setVariables((data.variables || []).map(v => ({
+      id: v.id,
+      name: v.name,
+      nameEn: v.nameEn || v.name_en || '',
+      type: v.type || 'continuous',
+      lowerBound: v.lower_bound ?? 0,
+      upperBound: v.upper_bound ?? null,
+      ontologyRef: v.ontology_ref || v.ontologyRef,
+      ontologyPath: v.ontology_path || v.ontologyPath,
+      nature: v.nature || '',
+      dimension: v.dimension || '',
+      domain: v.domain || '',
+      businessMeaning: v.business_meaning || v.businessMeaning || '',
+      unit: v.unit || '',
+      indices: v.indices || [],
+      indexMapping: v.indexMapping || v.index_mapping || [],
+      associatedProperties: v.associatedProperties || v.associated_properties || [],
+    })));
+    if (data.objectives && data.objectives.length > 0) {
+      setObjectives(data.objectives.map((o, i) => ({
+        id: o.id || `obj-${i + 1}`,
+        name: o.name || `目标函数${i + 1}`,
+        sense: o.sense || 'maximize',
+        coefficients: o.coefficients || parseExpressionToCoefficients(o.expression || '', data.variables || []),
+      })));
+    } else if (data.objective) {
+      setObjectives([{
+        id: 'obj-1',
+        name: '目标函数',
+        sense: data.objective.sense || 'maximize',
+        coefficients: data.objective.coefficients || parseExpressionToCoefficients(data.objective.expression || '', data.variables || []),
+      }]);
+    }
+    setConstraints((data.constraints || []).map(c => ({
+      id: c.id,
+      name: c.name,
+      coefficients: c.coefficients || parseExpressionToCoefficients(c.expression || '', data.variables || []),
+      sense: c.sense,
+      rhs: c.rhs,
+    })));
+  }
 
   function parseExpressionToCoefficients(expression, vars) {
     const coeffs = {};
@@ -250,46 +407,77 @@ export default function OptimizationModelEditor() {
   };
 
   const handleSave = async () => {
-    // 必填校验：中文名称 + 英文名称
-    const missingName = variables.find(v => !v.name?.trim());
-    const missingNameEn = variables.find(v => !v.nameEn?.trim());
-    if (missingName || missingNameEn) {
-      const msgs = [];
-      if (missingName) msgs.push('存在变量缺少中文名称');
-      if (missingNameEn) msgs.push('存在变量缺少英文名称');
-      alert(`必填校验未通过: ${msgs.join('、')}`);
-      return;
+    // LP/MIP 必填校验：中文名称 + 英文名称
+    if (problemType !== 'CP_SAT') {
+      const missingName = variables.find(v => !v.name?.trim());
+      const missingNameEn = variables.find(v => !v.nameEn?.trim());
+      if (missingName || missingNameEn) {
+        const msgs = [];
+        if (missingName) msgs.push('存在变量缺少中文名称');
+        if (missingNameEn) msgs.push('存在变量缺少英文名称');
+        alert(`必填校验未通过: ${msgs.join('、')}`);
+        return;
+      }
     }
 
     setSaving(true);
     try {
+      const saveProblemType = problemType === 'IP' ? 'MIP' : problemType;
       const modelData = {
         name: modelName,
         description: modelDescription,
-        problem_type: problemType,
+        problem_type: saveProblemType,
         status: modelStatus,
-        objectives: objectives.map(o => ({
+      };
+
+      if (problemType === 'CP_SAT') {
+        modelData.algorithm_config = {
+          int_vars: intVars,
+          bool_vars: boolVars,
+          interval_vars: intervalVars,
+          linear_constraints: cpLinearConstraints,
+          global_constraints: globalConstraints,
+          objective: cpsatObjective,
+        };
+        modelData.solver_config = solverConfig;
+        // CP-SAT 模型也保留 variables/objectives/constraints 字段（可能为空）
+        modelData.objectives = [];
+        modelData.variables = [];
+        modelData.constraints = [];
+      } else {
+        modelData.objectives = objectives.map(o => ({
           id: o.id,
           name: o.name,
           sense: o.sense,
           expression: buildExpression(o.coefficients, variables),
-        })),
-        variables: variables.map(v => ({
+        }));
+        modelData.variables = variables.map(v => ({
           id: v.id,
           name: v.name,
           nameEn: v.nameEn || '',
           type: v.type || 'continuous',
           lower_bound: v.lowerBound ?? 0,
           upper_bound: v.upperBound ?? null,
-        })),
-        constraints: constraints.map(c => ({
+          nature: v.nature || '',
+          dimension: v.dimension || '',
+          domain: v.domain || '',
+          businessMeaning: v.businessMeaning || '',
+          unit: v.unit || '',
+          ontologyRef: v.ontologyRef || '',
+          ontologyPath: v.ontologyPath || '',
+          indices: v.indices || [],
+          indexMapping: v.indexMapping || [],
+          associatedProperties: v.associatedProperties || [],
+        }));
+        modelData.constraints = constraints.map(c => ({
           id: c.id,
           name: c.name,
           expression: buildExpression(c.coefficients, variables),
           sense: c.sense,
           rhs: c.rhs,
-        })),
-      };
+        }));
+        modelData.solver_config = solverConfig;
+      }
 
       if (isNew) {
         const created = await api.post('/optimization/', modelData);
@@ -307,21 +495,30 @@ export default function OptimizationModelEditor() {
   };
 
   const handleSolve = async () => {
-    const hasVars = variables.length > 0;
-    const hasObjCoeffs = objectives.some(o => o.coefficients && Object.values(o.coefficients).some(c => c !== 0));
-    const hasConstraints = constraints.length > 0;
-    const missingName = variables.find(v => !v.name?.trim());
-    const missingNameEn = variables.find(v => !v.nameEn?.trim());
+    // CP-SAT 模型校验
+    if (problemType === 'CP_SAT') {
+      const hasIntOrBoolVars = intVars.length > 0 || boolVars.length > 0;
+      if (!hasIntOrBoolVars) {
+        alert('CP-SAT 模型至少需要定义一个整数或布尔变量');
+        return;
+      }
+    } else {
+      const hasVars = variables.length > 0;
+      const hasObjCoeffs = objectives.some(o => o.coefficients && Object.values(o.coefficients).some(c => c !== 0));
+      const hasConstraints = constraints.length > 0;
+      const missingName = variables.find(v => !v.name?.trim());
+      const missingNameEn = variables.find(v => !v.nameEn?.trim());
 
-    if (!hasVars || !hasObjCoeffs || !hasConstraints || missingName || missingNameEn) {
-      const msgs = [];
-      if (!hasVars) msgs.push('缺少决策变量');
-      if (!hasObjCoeffs) msgs.push('目标函数未定义');
-      if (!hasConstraints) msgs.push('缺少约束条件');
-      if (missingName) msgs.push('变量缺少中文名称');
-      if (missingNameEn) msgs.push('变量缺少英文名称');
-      alert(`模型不完整: ${msgs.join('、')}`);
-      return;
+      if (!hasVars || !hasObjCoeffs || !hasConstraints || missingName || missingNameEn) {
+        const msgs = [];
+        if (!hasVars) msgs.push('缺少决策变量');
+        if (!hasObjCoeffs) msgs.push('目标函数未定义');
+        if (!hasConstraints) msgs.push('缺少约束条件');
+        if (missingName) msgs.push('变量缺少中文名称');
+        if (missingNameEn) msgs.push('变量缺少英文名称');
+        alert(`模型不完整: ${msgs.join('、')}`);
+        return;
+      }
     }
 
     setSolving(true);
@@ -338,33 +535,57 @@ export default function OptimizationModelEditor() {
         setSolveResult(result);
         setShowResult(true);
       } else {
-        const primaryObj = objectives[0] || { sense: 'maximize', coefficients: {} };
-        const modelDef = {
-          name: modelName,
-          description: modelDescription,
-          problem_type: problemType,
-          status: 'draft',
-          objective: {
-            sense: primaryObj.sense,
-            expression: buildExpression(primaryObj.coefficients, variables),
-          },
-          variables: variables.map(v => ({
-            id: v.id,
-            name: v.name,
-            type: v.type || 'continuous',
-            lower_bound: v.lowerBound ?? 0,
-            upper_bound: v.upperBound ?? null,
-          })),
-          constraints: constraints.map(c => ({
-            id: c.id,
-            name: c.name,
-            expression: buildExpression(c.coefficients, variables),
-            sense: c.sense,
-            rhs: c.rhs,
-          })),
-        };
+        let modelDef;
+        const normalizedProblemType = problemType === 'IP' ? 'MIP' : problemType;
+        if (problemType === 'CP_SAT') {
+          modelDef = {
+            name: modelName,
+            description: modelDescription,
+            problem_type: 'CP_SAT',
+            status: 'draft',
+            variables: [],
+            objectives: [],
+            constraints: [],
+            algorithm_config: {
+              int_vars: intVars,
+              bool_vars: boolVars,
+              interval_vars: intervalVars,
+              linear_constraints: cpLinearConstraints,
+              global_constraints: globalConstraints,
+              objective: cpsatObjective,
+            },
+            solver_config: solverConfig,
+          };
+        } else {
+          const primaryObj = objectives[0] || { sense: 'maximize', coefficients: {} };
+          modelDef = {
+            name: modelName,
+            description: modelDescription,
+            problem_type: normalizedProblemType,
+            status: 'draft',
+            objective: {
+              sense: primaryObj.sense,
+              expression: buildExpression(primaryObj.coefficients, variables),
+            },
+            variables: variables.map(v => ({
+              id: v.id,
+              name: v.name,
+              type: v.type || 'continuous',
+              lower_bound: v.lowerBound ?? 0,
+              upper_bound: v.upperBound ?? null,
+            })),
+            constraints: constraints.map(c => ({
+              id: c.id,
+              name: c.name,
+              expression: buildExpression(c.coefficients, variables),
+              sense: c.sense,
+              rhs: c.rhs,
+            })),
+            solver_config: solverConfig,
+          };
+        }
 
-        const savedModel = isNew
+        const savedModel = isNew || isFromMock
           ? await api.post('/optimization/', modelDef)
           : await api.put(`/optimization/${id}`, modelDef);
 
@@ -516,7 +737,7 @@ export default function OptimizationModelEditor() {
     try {
       const modelDef = {
         name: importParsed.name || importFile.name,
-        problem_type: modelData.problemType,
+        problem_type: modelData.problemType === 'IP' ? 'MIP' : modelData.problemType,
         variables: importParsed.variables.map(v => ({
           id: varIdMap[v.name], name: v.name,
           type: v.isInteger ? 'integer' : v.isBinary ? 'binary' : 'continuous',
@@ -640,10 +861,10 @@ export default function OptimizationModelEditor() {
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 w-full">
         {/* 可视化视图 - 始终挂载，通过 CSS 显示/隐藏 */}
-        <div className={`flex flex-1 min-h-0 ${activeView === 'visual' ? '' : 'hidden'}`}>
-          <div className="flex-1 overflow-y-auto">
+        <div className={`flex flex-1 min-h-0 w-full ${activeView === 'visual' ? '' : 'hidden'}`}>
+          <div className="flex-1 overflow-y-auto w-full min-w-0">
             <VisualModelingPanel
               variables={variables}
               setVariables={setVariables}
@@ -654,6 +875,21 @@ export default function OptimizationModelEditor() {
               problemType={problemType}
               setProblemType={setProblemType}
               ontologies={ontologies}
+              // CP-SAT props
+              intVars={intVars}
+              setIntVars={setIntVars}
+              boolVars={boolVars}
+              setBoolVars={setBoolVars}
+              intervalVars={intervalVars}
+              setIntervalVars={setIntervalVars}
+              cpLinearConstraints={cpLinearConstraints}
+              setCpLinearConstraints={setCpLinearConstraints}
+              globalConstraints={globalConstraints}
+              setGlobalConstraints={setGlobalConstraints}
+              cpsatObjective={cpsatObjective}
+              setCpsatObjective={setCpsatObjective}
+              solverConfig={solverConfig}
+              setSolverConfig={setSolverConfig}
             />
           </div>
           <div className="w-[380px] border-l border-slate-200 overflow-y-auto bg-slate-50 flex-shrink-0">

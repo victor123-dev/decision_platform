@@ -54,6 +54,30 @@ export default function PythonViewPanel({ variables, objectives, constraints, pr
   const code = useMemo(() => {
     if (!variables.length) return '';
 
+    // Helper: objectTypeId → 集合大小参数名 (obj-work-order → n_work_orders)
+    const setParamName = (objectTypeId) => {
+      const base = objectTypeId.replace(/^obj-/, '').replace(/-/g, '_');
+      return `n_${base}s`;
+    };
+
+    // 从所有变量的 indices 中收集不重复的集合
+    const setMap = new Map(); // objectTypeId → { setName, param, alias, businessMeaning, objectTypeDisplayName, propertyId }
+    variables.forEach(v => {
+      (v.indices || []).forEach(idx => {
+        if (idx.objectTypeId && !setMap.has(idx.objectTypeId)) {
+          const mapping = (v.indexMapping || []).find(m => m.alias === idx.alias);
+          setMap.set(idx.objectTypeId, {
+            setName: idx.setName,
+            param: setParamName(idx.objectTypeId),
+            alias: idx.alias,
+            businessMeaning: idx.businessMeaning || idx.objectTypeDisplayName || '',
+            objectTypeDisplayName: idx.objectTypeDisplayName || '',
+            propertyId: mapping?.propertyId || '',
+          });
+        }
+      });
+    });
+
     let code = `"""\n模型名称: ${modelName || 'Untitled'}\n自动生成 — 基于 OR-Tools 线性规划求解器\n"""\n\n`;
     code += `from ortools.linear_solver import pywraplp\n\n\n`;
     code += `def solve_model():\n`;
@@ -65,6 +89,15 @@ export default function PythonViewPanel({ variables, objectives, constraints, pr
     code += `    if not solver:\n`;
     code += `        raise RuntimeError('无法创建 OR-Tools 求解器')\n\n`;
 
+    // ── 集合大小参数 ──
+    if (setMap.size > 0) {
+      code += `    # ─── 集合大小参数 ───\n`;
+      for (const info of setMap.values()) {
+        code += `    ${info.param} = 10  # TODO: 由数据决定\n`;
+      }
+      code += `\n`;
+    }
+
     // ── 决策变量 ──
     code += `    # ─── 决策变量 ───\n`;
     variables.forEach(v => {
@@ -74,12 +107,61 @@ export default function PythonViewPanel({ variables, objectives, constraints, pr
       const ub = v.upperBound != null ? v.upperBound : null;
       const ubStr = ub !== null ? fmtNum(ub) : 'solver.infinity()';
       const lbStr = fmtNum(lb);
-      if (v.type === 'binary') {
-        code += `    ${sv} = solver.BoolVar('${enName}')\n`;
-      } else if (v.type === 'integer') {
-        code += `    ${sv} = solver.IntVar(${lbStr}, ${ubStr}, '${enName}')\n`;
+      const dim = v.dimension || '0D';
+      const indices = v.indices || [];
+      const indexMapping = v.indexMapping || [];
+
+      if (dim === '0D' || indices.length === 0) {
+        // 0D: 单变量
+        code += `    # ${enName}: ${v.businessMeaning || enName}\n`;
+        if (v.type === 'binary') {
+          code += `    ${sv} = solver.BoolVar('${enName}')\n`;
+        } else if (v.type === 'integer') {
+          code += `    ${sv} = solver.IntVar(${lbStr}, ${ubStr}, '${enName}')\n`;
+        } else {
+          code += `    ${sv} = solver.NumVar(${lbStr}, ${ubStr}, '${enName}')\n`;
+        }
       } else {
-        code += `    ${sv} = solver.NumVar(${lbStr}, ${ubStr}, '${enName}')\n`;
+        // 多维变量: 1D / 2D / 3D
+        const aliasList = indices.map(idx => idx.alias);
+        const aliasStr = aliasList.join(',');
+
+        // 注释: 变量描述
+        code += `    # ${sv}[${aliasStr}]: ${v.businessMeaning || enName}\n`;
+
+        // 注释: 索引说明
+        const indexComments = indices.map(idx => {
+          const mapping = indexMapping.find(m => m.alias === idx.alias);
+          const propId = mapping?.propertyId || '';
+          const propPart = propId ? `, ${propId}` : '';
+          return `${idx.alias} ∈ ${idx.setName} (${idx.businessMeaning || idx.objectTypeDisplayName}${propPart})`;
+        });
+        code += `    # ${indexComments.join(', ')}\n`;
+
+        // 字典初始化
+        code += `    ${sv} = {}\n`;
+
+        // 嵌套循环
+        indices.forEach((idx, i) => {
+          const paramInfo = setMap.get(idx.objectTypeId);
+          const param = paramInfo?.param || '10';
+          const loopIndent = '    '.repeat(i + 1);
+          const comment = idx.businessMeaning || idx.objectTypeDisplayName || '';
+          code += `${loopIndent}for ${idx.alias} in range(${param}):  # ${idx.alias} = ${comment}\n`;
+        });
+
+        // 变量创建
+        const innerIndent = '    '.repeat(indices.length + 1);
+        const keyStr = aliasList.join(', ');
+        const fStr = aliasList.map(a => `{${a}}`).join('_');
+
+        if (v.type === 'binary') {
+          code += `${innerIndent}${sv}[${keyStr}] = solver.BoolVar(f'${sv}_${fStr}')\n`;
+        } else if (v.type === 'integer') {
+          code += `${innerIndent}${sv}[${keyStr}] = solver.IntVar(${lbStr}, ${ubStr}, f'${sv}_${fStr}')\n`;
+        } else {
+          code += `${innerIndent}${sv}[${keyStr}] = solver.NumVar(${lbStr}, ${ubStr}, f'${sv}_${fStr}')\n`;
+        }
       }
     });
 
@@ -116,7 +198,39 @@ export default function PythonViewPanel({ variables, objectives, constraints, pr
     variables.forEach(v => {
       const enName = v.nameEn || v.name;
       const sv = safeVar(enName);
-      code += `        print(f'  ${enName} = {${sv}.solution_value():.6f}')\n`;
+      const dim = v.dimension || '0D';
+      const indices = v.indices || [];
+
+      if (dim === '0D' || indices.length === 0) {
+        // 0D: 直接打印
+        code += `        print(f'  ${enName} = {${sv}.solution_value():.6f}')\n`;
+      } else if (dim === '1D') {
+        // 1D: 循环打印
+        const idx0 = indices[0];
+        const paramInfo = setMap.get(idx0.objectTypeId);
+        const param = paramInfo?.param || '10';
+        code += `        print('  ${enName}:')\n`;
+        code += `        for ${idx0.alias} in range(${param}):\n`;
+        code += `            print(f'    [{${idx0.alias}}] = {${sv}[${idx0.alias}].solution_value():.6f}')\n`;
+      } else {
+        // 2D/3D: 嵌套循环打印非零值
+        const aliasList = indices.map(idx => idx.alias);
+        const keyStr = aliasList.join(', ');
+        const fKeyStr = aliasList.map(a => `{${a}}`).join(',');
+
+        code += `        print('  ${enName} (非零值):')\n`;
+        indices.forEach((idx, i) => {
+          const paramInfo = setMap.get(idx.objectTypeId);
+          const param = paramInfo?.param || '10';
+          const loopIndent = '        ' + '    '.repeat(i);
+          code += `${loopIndent}for ${idx.alias} in range(${param}):\n`;
+        });
+
+        const valIndent = '        ' + '    '.repeat(indices.length);
+        code += `${valIndent}val = ${sv}[${keyStr}].solution_value()\n`;
+        code += `${valIndent}if abs(val) > 1e-6:\n`;
+        code += `${valIndent}    print(f'    [${fKeyStr}] = {val:.6f}')\n`;
+      }
     });
     code += `\n    elif status == pywraplp.Solver.INFEASIBLE:\n`;
     code += `        print('模型无解（约束不可行）')\n`;

@@ -1352,6 +1352,9 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
           ontologyRef: v.ontologyRef,
           ontologyPath: v.ontologyPath || getOntologyPath(v),
           dimension: v.dimension || '',
+          indices: v.indices || [],
+          indexMapping: v.indexMapping || [],
+          associatedProperties: v.associatedProperties || [],
           domain: v.domain || v.type || 'continuous',
           businessMeaning: v.businessMeaning || '',
           unit: v.unit || '',
@@ -1425,6 +1428,9 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
               ontologyRef: v.ontologyRef,
               ontologyPath: v.ontologyPath || getOntologyPath(v),
               dimension: v.dimension || '',
+              indices: v.indices || [],
+              indexMapping: v.indexMapping || [],
+              associatedProperties: v.associatedProperties || [],
               domain: v.domain || v.type || 'continuous',
               businessMeaning: v.businessMeaning || '',
               unit: v.unit || '',
@@ -2135,14 +2141,21 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
                     {isVarRef && <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 600 }}>$</span>}
                     <span style={{ fontSize: 13, color: 'var(--fg-3)', fontWeight: 500, fontFamily: 'serif' }}>·</span>
                     {matchedVar ? (
-                      <VariableToken
-                        variable={matchedVar}
-                        className="proposal-var-token"
-                        onClick={() => {
-                          setHighlightVariableId(matchedVar.id || matchedVar.name);
-                          setShowMappingModal(true);
-                        }}
-                      />
+                      <>
+                        <VariableToken
+                          variable={matchedVar}
+                          className="proposal-var-token"
+                          onClick={() => {
+                            setHighlightVariableId(matchedVar.id || matchedVar.name);
+                            setShowMappingModal(true);
+                          }}
+                        />
+                        {matchedVar.dimension && matchedVar.dimension !== '0D' && matchedVar.indices && matchedVar.indices.length > 0 && (
+                          <span style={{ fontSize: 10, color: '#9ca3af', fontFamily: 'monospace', fontWeight: 400 }}>
+                            [{matchedVar.indices.map(idx => idx.alias).join(',')}]
+                          </span>
+                        )}
+                      </>
                     ) : (
                       <span style={{ fontSize: 12, color: 'var(--fg)', fontWeight: 500 }}>{coeff.variable || '未命名'}</span>
                     )}
@@ -2259,6 +2272,11 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
                                 setShowMappingModal(true);
                               }}
                             />
+                            {v.dimension && v.dimension !== '0D' && v.indices && v.indices.length > 0 && (
+                              <span style={{ fontSize: 10, color: '#9ca3af', fontFamily: 'monospace', fontWeight: 400 }}>
+                                [{v.indices.map(idx => idx.alias).join(',')}]
+                              </span>
+                            )}
                           </div>
                         );
                       })}
@@ -2301,60 +2319,92 @@ export default function AIAgentChat({ onModelConfirmed, onClose }) {
               <button onClick={addVariable} className="proposal-small-btn">+ 添加</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {vars.map((v, idx) => (
-                <div key={v.id || idx} className="proposal-var-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <VariableToken
-                    variable={v}
-                    className="proposal-var-token"
-                    onClick={() => {
-                      setHighlightVariableId(v.id || v.name);
-                      setShowMappingModal(true);
-                    }}
-                  />
-                  <select
-                    value={v.type || 'continuous'}
-                    onChange={e => updateEditableVar(idx, 'type', e.target.value)}
-                    className="proposal-select"
-                    style={{ fontSize: 11, fontWeight: 500, padding: '3px 8px', paddingRight: 22 }}
-                  >
-                    <option value="continuous">连续</option>
-                    <option value="integer">整数</option>
-                    <option value="binary">二进制</option>
-                  </select>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500 }}>下界</label>
-                    <input
-                      type="number"
-                      value={v.lowerBound ?? 0}
-                      onChange={e => updateEditableVar(idx, 'lowerBound', parseFloat(e.target.value) || 0)}
-                      className="proposal-field-input"
-                      style={{ width: 72, fontSize: 11 }}
-                    />
+              {vars.map((v, idx) => {
+                const hasIndices = v.dimension && v.dimension !== '0D' && v.indices && v.indices.length > 0;
+                const hasMapping = v.indexMapping && v.indexMapping.length > 0;
+                return (
+                  <div key={v.id || idx} className="proposal-var-row" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {/* Row 1: variable info + controls */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <VariableToken
+                        variable={v}
+                        className="proposal-var-token"
+                        onClick={() => {
+                          setHighlightVariableId(v.id || v.name);
+                          setShowMappingModal(true);
+                        }}
+                      />
+                      {hasIndices && (
+                        <span style={{ fontSize: 10, color: '#9ca3af', fontFamily: 'monospace', fontWeight: 400 }}>
+                          [{v.indices.map(i => i.alias).join(',')}]
+                        </span>
+                      )}
+                      <select
+                        value={v.type || 'continuous'}
+                        onChange={e => updateEditableVar(idx, 'type', e.target.value)}
+                        className="proposal-select"
+                        style={{ fontSize: 11, fontWeight: 500, padding: '3px 8px', paddingRight: 22 }}
+                      >
+                        <option value="continuous">连续</option>
+                        <option value="integer">整数</option>
+                        <option value="binary">二进制</option>
+                      </select>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500 }}>下界</label>
+                        <input
+                          type="number"
+                          value={v.lowerBound ?? 0}
+                          onChange={e => updateEditableVar(idx, 'lowerBound', parseFloat(e.target.value) || 0)}
+                          className="proposal-field-input"
+                          style={{ width: 72, fontSize: 11 }}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500 }}>上界</label>
+                        <input
+                          type="number"
+                          value={v.upperBound ?? ''}
+                          onChange={e => updateEditableVar(idx, 'upperBound', e.target.value === '' ? null : parseFloat(e.target.value))}
+                          placeholder="∞"
+                          className="proposal-field-input"
+                          style={{ width: 72, fontSize: 11 }}
+                        />
+                      </div>
+                      <button
+                        onClick={() => removeVariable(idx)}
+                        style={{
+                          ...btnBase, padding: '2px 5px', background: 'transparent',
+                          border: 'none', color: 'var(--fg-3)', fontSize: 13, lineHeight: 1,
+                          marginLeft: 'auto',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
+                        title="删除变量"
+                      >✕</button>
+                    </div>
+                    {/* Row 2: index business meanings */}
+                    {hasIndices && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: 4 }}>
+                        {(hasMapping ? v.indexMapping : v.indices).map((item, iIdx) => {
+                          const alias = item.alias;
+                          const businessMeaning = item.businessMeaning || '';
+                          const propId = item.propertyId || '';
+                          return (
+                            <span key={iIdx} style={{ fontSize: 10, color: '#a855f7', fontFamily: 'monospace' }}>
+                              <span style={{ fontWeight: 600 }}>{alias}</span>
+                              {': '}
+                              {businessMeaning}
+                              {propId && (
+                                <span style={{ color: '#c084fc' }}>({propId})</span>
+                              )}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <label style={{ fontSize: 10, color: 'var(--fg-3)', fontWeight: 500 }}>上界</label>
-                    <input
-                      type="number"
-                      value={v.upperBound ?? ''}
-                      onChange={e => updateEditableVar(idx, 'upperBound', e.target.value === '' ? null : parseFloat(e.target.value))}
-                      placeholder="∞"
-                      className="proposal-field-input"
-                      style={{ width: 72, fontSize: 11 }}
-                    />
-                  </div>
-                  <button
-                    onClick={() => removeVariable(idx)}
-                    style={{
-                      ...btnBase, padding: '2px 5px', background: 'transparent',
-                      border: 'none', color: 'var(--fg-3)', fontSize: 13, lineHeight: 1,
-                      marginLeft: 'auto',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--danger)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--fg-3)'; }}
-                    title="删除变量"
-                  >✕</button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

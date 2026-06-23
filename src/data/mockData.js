@@ -717,8 +717,8 @@ export const nodeTypeDefinitions = [
       { type: 'loop_items', label: '批量循环', icon: 'RefreshCw', color: '#ca8a04', shape: 'diamond' },
       { type: 'compare_data', label: '数据对比', icon: 'ArrowRightLeft', color: '#7c3aed', shape: 'rect' },
       { type: 'stop_error', label: '终止与错误', icon: 'AlertTriangle', color: '#dc2626', shape: 'rect' },
-      { type: 'while', label: 'While 循环', icon: 'RefreshCw', color: '#eab308', shape: 'diamond' },
-      { type: 'do_while', label: 'Do While 循环', icon: 'RefreshCw', color: '#b91c1c', shape: 'diamond' },
+      { type: 'while', label: '条件循环', icon: 'RefreshCw', color: '#eab308', shape: 'diamond' },
+      { type: 'do_while', label: '后置条件循环', icon: 'RefreshCw', color: '#b91c1c', shape: 'diamond' },
     ],
   },
   {
@@ -744,6 +744,7 @@ export const nodeTypeDefinitions = [
       { type: 'limit', label: '数据限制', icon: 'Minimize2', color: '#a855f7', shape: 'rect' },
       { type: 'split_out', label: '列表拆分', icon: 'Expand', color: '#d946ef', shape: 'rect' },
       { type: 'summarize', label: '数据汇总', icon: 'LineChart', color: '#ec4899', shape: 'rect' },
+      { type: 'assignment', label: '赋值', icon: 'Variable', color: '#0ea5e9', shape: 'rect' },
     ],
   },
   {
@@ -768,6 +769,11 @@ export const nodeTypeDefinitions = [
       { type: 'forecast_model', label: '智能预测模型', icon: 'BarChart3', color: '#0d9488', shape: 'rect' },
       { type: 'optimization_model', label: '优化求解模型', icon: 'Activity', color: '#d97706', shape: 'rect' },
       { type: 'rules', label: '业务规则', icon: 'ListChecks', color: '#7c3aed', shape: 'rect' },
+      { type: 'simple_scorecard', label: '简单评分卡', icon: 'Hash', color: '#2563eb', shape: 'rect' },
+      { type: 'complex_scorecard', label: '复杂评分卡', icon: 'Calculator', color: '#0891b2', shape: 'rect' },
+      { type: 'decision_table', label: '决策表', icon: 'Table', color: '#7c3aed', shape: 'rect' },
+      { type: 'cross_decision_table', label: '交叉决策表', icon: 'Grid3x3', color: '#d946ef', shape: 'rect' },
+      { type: 'decision_tree', label: '决策树', icon: 'TreePine', color: '#059669', shape: 'rect' },
     ],
   },
   {
@@ -779,7 +785,7 @@ export const nodeTypeDefinitions = [
   {
     category: '代理',
     items: [
-      { type: 'agent_team', label: 'Agent 团队', icon: 'Users', color: '#3b82f6', shape: 'rect' },
+      { type: 'agent_team', label: '智能体团队', icon: 'Users', color: '#3b82f6', shape: 'rect' },
     ],
   },
   {
@@ -800,7 +806,7 @@ export const nodePropertyDefinitions = {
   interface: {
     sections: [
       { title: '接口配置', fields: [
-        { key: 'interface_name', label: '接口名称', type: 'text', placeholder: 'Supply Resilience Recommendation' },
+        { key: 'interface_name', label: '接口名称', type: 'text', placeholder: '如：供应链弹性推荐' },
         { key: 'input_params', label: '输入参数定义', type: 'textarea', placeholder: '参数名, 数据类型, 默认值, 必填...' },
         { key: 'trigger_type', label: '触发方式', type: 'select', options: ['手动', '定时', '事件驱动'], defaultValue: '手动' },
         { key: 'output_params', label: '输出参数定义', type: 'textarea', placeholder: '输出参数...' },
@@ -832,8 +838,8 @@ export const nodePropertyDefinitions = {
         { key: 'condition', label: '条件表达式', type: 'text', placeholder: '${score} >= 60' },
         { key: 'conditions', label: '条件组合', type: 'textarea', placeholder: '多条件组合配置（支持 AND/OR 逻辑）...' },
         { key: 'combine_logic', label: '组合逻辑', type: 'select', options: ['AND', 'OR'], defaultValue: 'AND' },
-        { key: 'true_label', label: '真分支标签', type: 'text', placeholder: 'YES' },
-        { key: 'false_label', label: '假分支标签', type: 'text', placeholder: 'NO' },
+        { key: 'true_label', label: '真分支标签', type: 'text', placeholder: '是' },
+        { key: 'false_label', label: '假分支标签', type: 'text', placeholder: '否' },
         { key: 'ignore_case', label: '忽略大小写', type: 'boolean', defaultValue: true },
         { key: 'convert_types', label: '类型自动转换', type: 'boolean', defaultValue: false },
         { key: 'description', label: '条件描述', type: 'textarea', placeholder: '描述条件逻辑...' },
@@ -848,7 +854,7 @@ export const nodePropertyDefinitions = {
   },
   while: {
     sections: [
-      { title: 'While 循环配置', fields: [
+      { title: '条件循环配置', fields: [
         { key: 'loop_condition', label: '循环条件', type: 'text', placeholder: '${counter} < ${max_count}' },
         { key: 'max_iterations', label: '最大迭代次数', type: 'number', defaultValue: 100 },
         { key: 'loop_variable', label: '循环变量', type: 'text', placeholder: 'counter' },
@@ -857,7 +863,7 @@ export const nodePropertyDefinitions = {
   },
   do_while: {
     sections: [
-      { title: 'Do While 循环配置', fields: [
+      { title: '后置条件循环配置', fields: [
         { key: 'loop_condition', label: '循环条件', type: 'text', placeholder: '${status} != "completed"' },
         { key: 'max_iterations', label: '最大迭代次数', type: 'number', defaultValue: 100 },
         { key: 'loop_variable', label: '循环变量', type: 'text', placeholder: 'iteration_count' },
@@ -868,7 +874,7 @@ export const nodePropertyDefinitions = {
   ui_screen: {
     sections: [
       { title: 'UI 界面配置', fields: [
-        { key: 'screen_template', label: '屏幕模板', type: 'text', placeholder: 'approval_form_v2' },
+        { key: 'screen_template', label: '屏幕模板', type: 'text', placeholder: '如：approval_form_v2' },
         { key: 'data_binding', label: '展示数据绑定', type: 'textarea', placeholder: '上下文数据绑定...' },
         { key: 'input_fields', label: '用户输入字段', type: 'textarea', placeholder: '需要用户填写的字段列表...' },
         { key: 'button_actions', label: '按钮动作', type: 'select', options: ['确认/取消', '批准/拒绝/委派', '自定义'], defaultValue: '确认/取消' },
@@ -882,7 +888,7 @@ export const nodePropertyDefinitions = {
   notification: {
     sections: [
       { title: '通知配置', fields: [
-        { key: 'channel', label: '通知渠道', type: 'select', options: ['Email', '应用内', 'Push', 'SMS'], defaultValue: 'Email' },
+        { key: 'channel', label: '通知渠道', type: 'select', options: ['邮件', '应用内', '推送', '短信'], defaultValue: '邮件' },
         { key: 'recipients', label: '接收人', type: 'textarea', placeholder: '用户/用户组/角色...' },
         { key: 'template', label: '通知模板', type: 'textarea', placeholder: '消息内容模板...' },
         { key: 'priority', label: '优先级', type: 'select', options: ['高', '中', '低'], defaultValue: '中' },
@@ -895,7 +901,7 @@ export const nodePropertyDefinitions = {
     sections: [
       { title: '数据流配置', fields: [
         { key: 'stream_type', label: '流类型', type: 'select', options: ['输入流', '输出流'], defaultValue: '输入流' },
-        { key: 'source_target', label: '数据源/目标', type: 'select', options: ['Kafka', 'Event Hub', '内部消息总线'], defaultValue: 'Kafka' },
+        { key: 'source_target', label: '数据源/目标', type: 'select', options: ['Kafka消息队列', '事件中心', '内部消息总线'], defaultValue: 'Kafka消息队列' },
         { key: 'message_format', label: '消息格式', type: 'select', options: ['JSON', 'Avro', 'Protobuf'], defaultValue: 'JSON' },
         { key: 'batch_size', label: '批处理大小', type: 'number', defaultValue: 100 },
         { key: 'consumption_mode', label: '消费模式', type: 'select', options: ['实时', '微批'], defaultValue: '实时' },
@@ -936,7 +942,7 @@ export const nodePropertyDefinitions = {
     sections: [
       { title: '机器学习模型配置', fields: [
         { key: 'model_ref', label: '模型引用', type: 'text', placeholder: 'mdl-001' },
-        { key: 'model_type', label: '模型类型', type: 'select', options: ['分类', '回归', '聚类', 'NLP'], defaultValue: '分类' },
+        { key: 'model_type', label: '模型类型', type: 'select', options: ['分类', '回归', '聚类', '自然语言处理'], defaultValue: '分类' },
         { key: 'feature_mapping', label: '输入特征映射', type: 'textarea', placeholder: '输入数据到模型特征的映射...' },
         { key: 'output_mapping', label: '输出结果映射', type: 'textarea', placeholder: '模型输出到流程变量的映射...' },
         { key: 'confidence_threshold', label: '置信度阈值', type: 'number', defaultValue: 0.7 },
@@ -985,9 +991,9 @@ export const nodePropertyDefinitions = {
       { title: '子流程配置', fields: [
         { key: 'source', label: '工作流来源', type: 'select', options: ['数据库', '自定义'], defaultValue: '数据库' },
         { key: 'subprocess_ref', label: '子流程引用', type: 'text', placeholder: 'flow-004' },
-        { key: 'input_mapping', label: '输入参数映射', type: 'textarea', placeholder: 'parent_var → child_var' },
+        { key: 'input_mapping', label: '输入参数映射', type: 'textarea', placeholder: '父流程变量 → 子流程变量' },
         { key: 'workflow_inputs', label: '工作流输入参数', type: 'textarea', placeholder: '传递给子工作流的输入参数映射...' },
-        { key: 'output_mapping', label: '输出参数映射', type: 'textarea', placeholder: 'child_result → parent_result' },
+        { key: 'output_mapping', label: '输出参数映射', type: 'textarea', placeholder: '子流程结果 → 父流程结果' },
         { key: 'execution_mode', label: '执行模式', type: 'select', options: ['同步', '异步'], defaultValue: '同步' },
         { key: 'timeout', label: '执行超时 (ms)', type: 'number', defaultValue: 30000 },
         { key: 'on_error', label: '错误处理策略', type: 'select', options: ['继续', '终止', '重试', '跳过'], defaultValue: '终止' },
@@ -1006,17 +1012,17 @@ export const nodePropertyDefinitions = {
   // --- 代理 ---
   agent_team: {
     sections: [
-      { title: 'Agent 团队配置', fields: [
-        { key: 'agent_team_ref', label: 'Agent Team 引用', type: 'text', placeholder: 'team-risk-analysis' },
+      { title: '智能体团队配置', fields: [
+        { key: 'agent_team_ref', label: '智能体团队引用', type: 'text', placeholder: 'team-risk-analysis' },
         { key: 'task_description', label: '任务描述', type: 'textarea', placeholder: '自然语言描述任务...' },
         { key: 'input_context', label: '输入上下文', type: 'textarea', placeholder: '传递给 Agent Team 的上下文数据...' },
         { key: 'output_mapping', label: '输出接收', type: 'textarea', placeholder: 'Agent 执行结果的接收变量...' },
-        { key: 'llm_config', label: 'LLM 配置', type: 'select', options: ['GPT-4', 'Claude', 'Gemini', '自定义'], defaultValue: 'GPT-4' },
+        { key: 'llm_config', label: '大模型配置', type: 'select', options: ['GPT-4', 'Claude', 'Gemini', '自定义'], defaultValue: 'GPT-4' },
         { key: 'max_rounds', label: '最大迭代轮次', type: 'number', defaultValue: 5 },
         { key: 'human_in_loop', label: '人工审批点', type: 'select', options: ['始终', '高风险时', '从不'], defaultValue: '高风险时' },
         { key: 'timeout', label: '执行超时 (ms)', type: 'number', defaultValue: 60000 },
-        { key: 'max_tokens', label: '最大 Token 数', type: 'number', defaultValue: 4096 },
-        { key: 'temperature', label: 'Temperature', type: 'number', defaultValue: 0.3 },
+        { key: 'max_tokens', label: '最大Token数', type: 'number', defaultValue: 4096 },
+        { key: 'temperature', label: '随机性（Temperature）', type: 'number', defaultValue: 0.3 },
         { key: 'on_error', label: '错误处理策略', type: 'select', options: ['重试', '降级到人工', '终止流程'], defaultValue: '重试' },
       ]},
     ],
@@ -1025,12 +1031,12 @@ export const nodePropertyDefinitions = {
   object_access: {
     sections: [
       { title: '对象访问配置', fields: [
-        { key: 'ontology_ref', label: '本体引用', type: 'text', placeholder: 'ont-customer-360' },
-        { key: 'object_type', label: '对象类型', type: 'text', placeholder: 'Customer' },
+        { key: 'ontology_ref', label: '本体引用', type: 'text', placeholder: '如：ont-customer-360' },
+        { key: 'object_type', label: '对象类型', type: 'text', placeholder: '如：Customer' },
         { key: 'access_mode', label: '访问模式', type: 'select', options: ['查询', '创建', '更新', '删除'], defaultValue: '查询' },
         { key: 'filter_condition', label: '过滤条件', type: 'textarea', placeholder: '对象查询条件...' },
         { key: 'field_selection', label: '字段选择', type: 'textarea', placeholder: '需要访问的字段列表...' },
-        { key: 'output_variable', label: '输出变量', type: 'text', placeholder: 'query_result' },
+        { key: 'output_variable', label: '输出变量', type: 'text', placeholder: '如：query_result' },
       ]},
     ],
   },
@@ -1069,7 +1075,7 @@ export const nodePropertyDefinitions = {
       { title: '多路分支配置', fields: [
         { key: 'mode', label: '路由模式', type: 'select', options: ['规则匹配', '表达式'], defaultValue: '规则匹配' },
         { key: 'number_of_outputs', label: '输出数量', type: 'number', defaultValue: 4 },
-        { key: 'output_index', label: '输出索引表达式', type: 'text', placeholder: '={{}} (表达式模式时使用)' },
+        { key: 'output_index', label: '输出索引表达式', type: 'text', placeholder: '={{ }} 表达式（表达式模式时使用）' },
         { key: 'rules', label: '匹配规则', type: 'textarea', placeholder: '为每个输出配置匹配规则...' },
       ]},
       { title: '通用设置', fields: [
@@ -1296,6 +1302,185 @@ export const nodePropertyDefinitions = {
       ]},
       { title: '通用设置', fields: [
         { key: 'notes', label: '节点备注', type: 'textarea', placeholder: '备注信息...' },
+      ]},
+    ],
+  },
+
+  // --- JVS 规则引擎新增节点 (v3 — 基于JVS官方文档全面调研) ---
+
+  // ===== 1. 赋值节点 =====
+  // JVS: 变量转换与特征衍生，支持基础赋值/映射赋值/条件赋值
+  assignment: {
+    sections: [
+      { title: '基础设置', fields: [
+        { key: 'exception_config', label: '异常配置', type: 'boolean', defaultValue: false },
+        { key: 'node_name', label: '节点名称', type: 'text', defaultValue: '赋值' },
+      ]},
+      { title: '赋值配置', fields: [
+        { key: 'target_variable', label: '目标变量', type: 'text', placeholder: '选择或输入目标变量名' },
+        { key: 'variable_type', label: '变量类型', type: 'select', options: ['整数', '小数', '字符串', '布尔', '日期', '集合'], defaultValue: '字符串' },
+        { key: 'assignment_mode', label: '赋值方式', type: 'select', options: ['基础赋值', '映射赋值', '条件赋值'], defaultValue: '基础赋值' },
+        { key: 'value_source', label: '值来源', type: 'select', options: ['固定值', '引用变量', '表达式', '函数计算', '节点结果'], defaultValue: '固定值' },
+        { key: 'fixed_value', label: '固定值', type: 'text', placeholder: '值来源为"固定值"时填写' },
+        { key: 'ref_variable', label: '引用变量', type: 'text', placeholder: '值来源为"引用变量"时，选择引用变量名' },
+        { key: 'expression', label: '赋值表达式', type: 'textarea', placeholder: '值来源为"表达式"或"函数计算"时填写\n示例: ${income} * 0.3 - ${debt} * 0.5\n函数: ROUND(${amount} / ${count}, 2)' },
+        { key: 'condition_expression', label: '条件表达式', type: 'textarea', placeholder: '赋值方式为"条件赋值"时填写判断条件\n示例: IF(${age} >= 18, "成年", "未成年")' },
+        { key: 'mapping_rules', label: '映射规则', type: 'textarea', placeholder: '赋值方式为"映射赋值"时配置映射表\n[\n  {"match": "A", "value": "优秀"},\n  {"match": "B", "value": "良好"},\n  {"match": "C", "value": "一般"}\n]' },
+        { key: 'default_value', label: '默认值', type: 'text', placeholder: '表达式计算失败或条件不匹配时的默认值' },
+      ]},
+      { title: '变量管理', fields: [
+        { key: 'private_variables', label: '私有变量', type: 'textarea', placeholder: '定义本节点私有变量\n每行: 变量名|类型|默认值\n如: temp_score|小数|0' },
+        { key: 'import_variables', label: '引入变量', type: 'text', placeholder: '从上游节点或决策流入参引入变量，逗号分隔' },
+      ]},
+    ],
+  },
+
+  // ===== 2. 简单评分卡 =====
+  // JVS: 评分分配表模式，每行定义一个评分维度（变量名/类型/权重/评分条件/值/备注）
+  simple_scorecard: {
+    sections: [
+      { title: '基础设置', fields: [
+        { key: 'exception_config', label: '异常配置', type: 'boolean', defaultValue: false },
+        { key: 'node_name', label: '节点名称', type: 'text', defaultValue: '简单评分卡' },
+        { key: 'base_score', label: '基础分', type: 'number', defaultValue: 0 },
+      ]},
+      { title: '评分分配表', fields: [
+        { key: 'score_items', label: '评分项配置', type: 'textarea', placeholder: 'JVS评分分配表 — 每行一个评分维度:\n[\n  {\n    "variable_name": "年龄",\n    "variable_type": "整数",\n    "weight": "100%",\n    "scoring_condition": "当 \'年龄\' 大于等于 18 时",\n    "value_source": "固定值",\n    "value": 10,\n    "note": "满18岁加10分"\n  },\n  {\n    "variable_name": "月收入",\n    "variable_type": "小数",\n    "weight": "80%",\n    "scoring_condition": "当 \'月收入\' 大于等于 50000 时",\n    "value_source": "固定值",\n    "value": 15,\n    "note": "月收入满5万加15分"\n  },\n  {\n    "variable_name": "逾期次数",\n    "variable_type": "整数",\n    "weight": "100%",\n    "scoring_condition": "当 \'逾期次数\' 大于等于 3 时",\n    "value_source": "固定值",\n    "value": -20,\n    "note": "逾期3次以上扣20分"\n  }\n]' },
+      ]},
+      { title: '评分汇总', fields: [
+        { key: 'score_sum', label: '分数求和', type: 'boolean', defaultValue: true },
+        { key: 'weight_sum', label: '权重求和', type: 'boolean', defaultValue: false },
+        { key: 'result_variable', label: '结果变量', type: 'text', placeholder: '评分结果赋值的变量名，如: total_score' },
+        { key: 'min_score', label: '最低分限制', type: 'number', defaultValue: 0 },
+        { key: 'max_score', label: '最高分限制', type: 'number', defaultValue: 100 },
+      ]},
+      { title: '评价维度（可选）', fields: [
+        { key: 'evaluation_dimensions', label: '评价维度分组', type: 'textarea', placeholder: '将评分项按维度分组:\n[\n  {"name": "基本信息", "variables": ["年龄", "学历"]},\n  {"name": "财务状况", "variables": ["月收入", "逾期次数"]}\n]' },
+      ]},
+      { title: '变量管理', fields: [
+        { key: 'private_variables', label: '私有变量', type: 'textarea', placeholder: '定义本节点私有变量' },
+        { key: 'import_variables', label: '引入变量', type: 'text', placeholder: '从上游节点引入变量，逗号分隔' },
+      ]},
+    ],
+  },
+
+  // ===== 3. 复杂评分卡 =====
+  // JVS: 多维度+三级条件层级，评分规则表（一级/二级/三级条件 + 值 + 备注）
+  complex_scorecard: {
+    sections: [
+      { title: '基础设置', fields: [
+        { key: 'exception_config', label: '异常配置', type: 'boolean', defaultValue: false },
+        { key: 'node_name', label: '节点名称', type: 'text', defaultValue: '复杂评分卡' },
+      ]},
+      { title: '评分维度定义', fields: [
+        { key: 'scoring_dimensions', label: '评分维度', type: 'textarea', placeholder: '定义多个评分维度，每个维度包含权重和规则:\n[\n  {\n    "name": "信用维度",\n    "weight": 0.4,\n    "rules": [\n      {"level1": "当 \'信用年限\' 大于等于 5 时", "level2": "当 \'逾期次数\' 小于等于 2 时", "level3": "", "value": 90},\n      {"level1": "当 \'信用年限\' 大于等于 2 时", "level2": "", "level3": "", "value": 60},\n      {"level1": "当 \'信用年限\' 小于 2 时", "level2": "", "level3": "", "value": 30}\n    ]\n  },\n  {\n    "name": "收入维度",\n    "weight": 0.6,\n    "rules": [\n      {"level1": "当 \'月收入\' 大于等于 100000 时", "level2": "当 \'负债比\' 小于等于 0.3 时", "level3": "", "value": 95},\n      {"level1": "当 \'月收入\' 大于等于 50000 时", "level2": "", "level3": "", "value": 70},\n      {"level1": "当 \'月收入\' 小于 50000 时", "level2": "", "level3": "", "value": 40}\n    ]\n  }\n]' },
+      ]},
+      { title: '评分规则表（扁平模式）', fields: [
+        { key: 'scoring_rules', label: '评分规则', type: 'textarea', placeholder: '不使用维度时，可直接配置扁平规则表:\n[\n  {\n    "level1_condition": "当 \'成本中心负责人\' 等于任意一个时",\n    "level2_condition": "当 \'金额\' 等于 \'1\' 时",\n    "level3_condition": "",\n    "value": 0,\n    "note": "请输入备注"\n  },\n  {\n    "level1_condition": "当 \'负责人\' 等于1且 \'级别\' 等于2时",\n    "level2_condition": "当 \'部门\' 等于3时",\n    "level3_condition": "",\n    "value": 50,\n    "note": "多条件AND组合"\n  }\n]' },
+      ]},
+      { title: '评分汇总', fields: [
+        { key: 'aggregation', label: '聚合方式', type: 'select', options: ['加权求和', '加权平均', '取最高维度分', '取最低维度分'], defaultValue: '加权求和' },
+        { key: 'result_variable', label: '结果变量', type: 'text', placeholder: '评分结果赋值的变量名' },
+        { key: 'weight_check', label: '权重校验（总和=1）', type: 'boolean', defaultValue: true },
+        { key: 'normalization', label: '归一化', type: 'select', options: ['无', 'Min-Max归一化', '百分位映射'], defaultValue: '无' },
+        { key: 'min_score', label: '最低分限制', type: 'number', defaultValue: 0 },
+        { key: 'max_score', label: '最高分限制', type: 'number', defaultValue: 100 },
+      ]},
+      { title: '变量管理', fields: [
+        { key: 'private_variables', label: '私有变量', type: 'textarea', placeholder: '定义本节点私有变量' },
+        { key: 'import_variables', label: '引入变量', type: 'text', placeholder: '从上游节点引入变量，逗号分隔' },
+      ]},
+    ],
+  },
+
+  // ===== 4. 决策表 =====
+  // JVS: 三维决策表（条件变量×动作变量×优先级），6种冲突解决策略
+  decision_table: {
+    sections: [
+      { title: '基础设置', fields: [
+        { key: 'exception_config', label: '异常配置', type: 'boolean', defaultValue: false },
+        { key: 'node_name', label: '节点名称', type: 'text', defaultValue: '决策表' },
+        { key: 'table_name', label: '决策表名称', type: 'text', placeholder: '决策表 1' },
+      ]},
+      { title: '条件变量配置', fields: [
+        { key: 'condition_variables', label: '条件变量', type: 'textarea', placeholder: '定义决策表的条件列（维度）:\n[\n  {"name": "成本中心负责人", "type": "字符串", "source": "引用变量"},\n  {"name": "采购金额", "type": "小数", "source": "引用变量"}\n]\n支持: 新增维度 / 引入变量 / 新增条件组' },
+      ]},
+      { title: '决策规则表', fields: [
+        { key: 'decision_rules', label: '规则配置', type: 'textarea', placeholder: '每行规则定义条件组合和对应结果:\n[\n  {\n    "priority": 1,\n    "conditions": {\n      "成本中心负责人": {"operator": "等于", "value_source": "固定值", "value": "张三"},\n      "采购金额": {"operator": "大于等于", "value_source": "固定值", "value": "10000"}\n    },\n    "actions": {\n      "审批结果": {"source": "固定值", "value": "自动批准"},\n      "额度": {"source": "固定值", "value": "50000"}\n    },\n    "note": "高权限+大额 -> 自动批准"\n  },\n  {\n    "priority": 2,\n    "conditions": {\n      "成本中心负责人": {"operator": "等于", "value_source": "固定值", "value": "张三"},\n      "采购金额": {"operator": "小于", "value_source": "固定值", "value": "10000"}\n    },\n    "actions": {\n      "审批结果": {"source": "固定值", "value": "通过"}\n    },\n    "note": "高权限+小额 -> 直接通过"\n  }\n]' },
+      ]},
+      { title: '结果变量', fields: [
+        { key: 'result_variables', label: '结果变量定义', type: 'textarea', placeholder: '定义决策表输出的结果变量:\n[\n  {"name": "审批结果", "type": "字符串", "default": "待审批"},\n  {"name": "额度", "type": "整数", "default": 0}\n]\n结果来源: 固定值 / 引用变量 / 节点结果' },
+        { key: 'default_result', label: '默认结果', type: 'text', placeholder: '无规则命中时的默认输出' },
+      ]},
+      { title: '冲突解决策略', fields: [
+        { key: 'hit_policy', label: '命中策略', type: 'select', options: ['优先匹配', '最近修改优先', '首次命中', '全部收集', '唯一命中'], defaultValue: '优先匹配' },
+        { key: 'priority_field', label: '优先级字段', type: 'text', placeholder: '命中策略为"优先级命中"时指定优先级字段名' },
+      ]},
+      { title: '变量管理', fields: [
+        { key: 'private_variables', label: '私有变量', type: 'textarea', placeholder: '定义本节点私有变量' },
+        { key: 'import_variables', label: '引入变量', type: 'text', placeholder: '从上游节点引入变量，逗号分隔' },
+      ]},
+    ],
+  },
+
+  // ===== 5. 交叉决策表 =====
+  // JVS: 四维决策矩阵（行维度×列维度×动作×优先级），行列交叉确定结果
+  cross_decision_table: {
+    sections: [
+      { title: '基础设置', fields: [
+        { key: 'exception_config', label: '异常配置', type: 'boolean', defaultValue: false },
+        { key: 'node_name', label: '节点名称', type: 'text', defaultValue: '交叉决策表' },
+        { key: 'table_name', label: '交叉决策表名称', type: 'text', placeholder: '交叉决策表 1' },
+      ]},
+      { title: '行维度配置', fields: [
+        { key: 'row_variable', label: '行维度变量', type: 'text', placeholder: '绑定变量或入参作为行条件，如: risk_level' },
+        { key: 'row_keys', label: '行键值列表', type: 'textarea', placeholder: '["低", "中", "高"]' },
+        { key: 'row_operator', label: '行匹配方式', type: 'select', options: ['精确匹配', '范围匹配', '模糊匹配'], defaultValue: '精确匹配' },
+      ]},
+      { title: '列维度配置', fields: [
+        { key: 'column_variable', label: '列维度变量', type: 'text', placeholder: '绑定变量或入参作为列条件，如: loan_term' },
+        { key: 'column_keys', label: '列键值列表', type: 'textarea', placeholder: '["短期", "中期", "长期"]' },
+        { key: 'column_operator', label: '列匹配方式', type: 'select', options: ['精确匹配', '范围匹配', '模糊匹配'], defaultValue: '精确匹配' },
+      ]},
+      { title: '交叉矩阵值', fields: [
+        { key: 'matrix_values', label: '交叉矩阵', type: 'textarea', placeholder: '行×列 二维结果矩阵（与行列键值一一对应）:\n[\n  [3.5, 4.0, 4.5],\n  [4.5, 5.0, 5.5],\n  [6.0, 7.0, 8.0]\n]\n矩阵中每个值支持: 固定值 / 引用变量 / 节点结果' },
+        { key: 'default_value', label: '默认值', type: 'text', placeholder: '行列键不在范围内时的默认输出' },
+      ]},
+      { title: '结果配置', fields: [
+        { key: 'result_variable', label: '结果变量', type: 'text', placeholder: '交叉查找结果赋值的目标变量名' },
+        { key: 'result_type', label: '结果类型', type: 'select', options: ['整数', '小数', '字符串', '布尔'], defaultValue: '小数' },
+      ]},
+      { title: '变量管理', fields: [
+        { key: 'private_variables', label: '私有变量', type: 'textarea', placeholder: '定义本节点私有变量' },
+        { key: 'import_variables', label: '引入变量', type: 'text', placeholder: '从上游节点引入变量，逗号分隔' },
+      ]},
+    ],
+  },
+
+  // ===== 6. 决策树 =====
+  // JVS: 树形结构（变量节点+条件节点+动作节点），支持条件组、运算符、阈值
+  decision_tree: {
+    sections: [
+      { title: '基础设置', fields: [
+        { key: 'exception_config', label: '异常配置', type: 'boolean', defaultValue: false },
+        { key: 'node_name', label: '节点名称', type: 'text', defaultValue: '决策树' },
+        { key: 'tree_name', label: '决策树名称', type: 'text', placeholder: '决策树 1' },
+      ]},
+      { title: '树结构配置', fields: [
+        { key: 'tree_nodes', label: '树节点定义', type: 'textarea', placeholder: 'JVS决策树三种节点类型: 变量节点/条件节点/动作节点\n[\n  {\n    "id": "root",\n    "type": "condition",\n    "variable": "年龄",\n    "operator": "大于等于",\n    "value_source": "固定值",\n    "value": 30,\n    "true_child": "node_approve",\n    "false_child": "node_check_income",\n    "note": "根条件: 年龄>=30?"\n  },\n  {\n    "id": "node_approve",\n    "type": "action",\n    "result_variable": "审批结果",\n    "result_value": "自动批准",\n    "result_source": "固定值"\n  },\n  {\n    "id": "node_check_income",\n    "type": "condition",\n    "variable": "收入",\n    "operator": "大于等于",\n    "value_source": "固定值",\n    "value": 8000,\n    "true_child": "node_conditional",\n    "false_child": "node_reject"\n  },\n  {\n    "id": "node_conditional",\n    "type": "action",\n    "result_variable": "审批结果",\n    "result_value": "有条件批准",\n    "result_source": "固定值"\n  },\n  {\n    "id": "node_reject",\n    "type": "action",\n    "result_variable": "审批结果",\n    "result_value": "拒绝",\n    "result_source": "固定值"\n  }\n]' },
+        { key: 'root_node_id', label: '根节点ID', type: 'text', defaultValue: 'root' },
+        { key: 'max_depth', label: '最大遍历深度', type: 'number', defaultValue: 20 },
+      ]},
+      { title: '条件运算符', fields: [
+        { key: 'supported_operators', label: '支持的运算符', type: 'select', options: ['全部（等于/不等于/大于/小于/大于等于/小于等于/包含/不包含/为空/不为空/属于/不属于）', '仅数值比较（等于/大于/小于/大于等于/小于等于）', '仅字符串比较（等于/不等于/包含/不包含/为空）'], defaultValue: '全部（等于/不等于/大于/小于/大于等于/小于等于/包含/不包含/为空/不为空/属于/不属于）' },
+      ]},
+      { title: '结果配置', fields: [
+        { key: 'default_result_variable', label: '默认结果变量', type: 'text', placeholder: '无法匹配任何分支时的默认结果变量名' },
+        { key: 'default_value', label: '默认值', type: 'text', placeholder: '默认结果值' },
+      ]},
+      { title: '变量管理', fields: [
+        { key: 'private_variables', label: '私有变量', type: 'textarea', placeholder: '定义本节点私有变量' },
+        { key: 'import_variables', label: '引入变量', type: 'text', placeholder: '从上游节点引入变量，逗号分隔' },
       ]},
     ],
   },

@@ -149,6 +149,35 @@ def init_decision_flows():
                 {"id": "e6", "source": "n5", "target": "n7"},
                 {"id": "e7", "source": "n6", "target": "n7"},
             ]
+        },
+        {
+            "id": "flow-006",
+            "name": "信贷综合评分决策流",
+            "description": "使用评分卡、决策表和决策树综合评估信贷申请，演示JVS规则引擎新节点类型",
+            "node_count": 8,
+            "tags": ["信贷", "评分卡", "决策表"],
+            "updated_at": "2026-06-18 10:00",
+            "checked_out_by": None,
+            "status": "draft",
+            "nodes": [
+                {"id": "n1", "type": "interface", "position": {"x": 50, "y": 250}, "data": {"label": "信贷申请入口", "config": {}}},
+                {"id": "n2", "type": "assignment", "position": {"x": 250, "y": 250}, "data": {"label": "计算负债比", "config": {"target_variable": "debt_ratio", "variable_type": "小数", "assignment_mode": "基础赋值", "value_source": "表达式", "expression": "${debt} / ${income}", "default_value": "0"}}},
+                {"id": "n3", "type": "simple_scorecard", "position": {"x": 450, "y": 250}, "data": {"label": "基础信用评分", "config": {"base_score": 30, "score_items": '[{"variable_name":"age","variable_type":"整数","weight":"100%","scoring_condition":"当 \'age\' 大于等于 25 时","value_source":"固定值","value":10,"note":"年龄达标"},{"variable_name":"income","variable_type":"小数","weight":"100%","scoring_condition":"当 \'income\' 大于等于 50000 时","value_source":"固定值","value":20,"note":"收入达标"},{"variable_name":"debt_ratio","variable_type":"小数","weight":"100%","scoring_condition":"当 \'debt_ratio\' 小于等于 0.5 时","value_source":"固定值","value":15,"note":"负债比低"}]', "score_sum": True, "weight_sum": False, "result_variable": "scorecard_score"}}},
+                {"id": "n4", "type": "decision_table", "position": {"x": 650, "y": 250}, "data": {"label": "风险等级判定", "config": {"condition_variables": '[{"name":"scorecard_score","type":"小数","source":"context"}]', "decision_rules": '[{"priority":1,"conditions":{"scorecard_score":{"operator":"大于等于","value_source":"固定值","value":70}},"actions":{"risk_level":{"source":"固定值","value":"低"},"credit_limit":{"source":"固定值","value":100000}},"note":"高评分"},{"priority":2,"conditions":{"scorecard_score":{"operator":"大于等于","value_source":"固定值","value":50}},"actions":{"risk_level":{"source":"固定值","value":"中"},"credit_limit":{"source":"固定值","value":50000}},"note":"中等评分"},{"priority":3,"conditions":{"scorecard_score":{"operator":"小于","value_source":"固定值","value":50}},"actions":{"risk_level":{"source":"固定值","value":"高"},"credit_limit":{"source":"固定值","value":10000}},"note":"低评分"}]', "result_variables": '[{"name":"risk_level","type":"字符串","default":"未知"},{"name":"credit_limit","type":"小数","default":0}]', "hit_policy": "优先匹配"}}},
+                {"id": "n5", "type": "cross_decision_table", "position": {"x": 850, "y": 250}, "data": {"label": "额度利率矩阵", "config": {"row_variable": "risk_level", "row_keys": '["低","中","高"]', "row_operator": "精确匹配", "column_variable": "loan_term", "column_keys": '["短期","中期","长期"]', "column_operator": "精确匹配", "matrix_values": '[[3.5,4.0,4.5],[4.5,5.0,5.5],[6.0,7.0,8.0]]', "default_value": "5.0", "result_variable": "interest_rate", "result_type": "小数"}}},
+                {"id": "n6", "type": "decision_tree", "position": {"x": 1050, "y": 250}, "data": {"label": "最终审批决策", "config": {"tree_nodes": '[{"id":"root","type":"condition","variable":"risk_level","operator":"等于","value_source":"固定值","value":"低","true_child":"approve","false_child":"check_mid"},{"id":"approve","type":"action","result_variable":"approval_decision","result_value":"自动批准","result_source":"固定值"},{"id":"check_mid","type":"condition","variable":"scorecard_score","operator":"大于等于","value_source":"固定值","value":50,"true_child":"conditional","false_child":"reject"},{"id":"conditional","type":"action","result_variable":"approval_decision","result_value":"有条件批准","result_source":"固定值"},{"id":"reject","type":"action","result_variable":"approval_decision","result_value":"拒绝","result_source":"固定值"}]', "root_node_id": "root", "max_depth": 20, "default_result_variable": "approval_decision", "default_value": "拒绝"}}},
+                {"id": "n7", "type": "notification", "position": {"x": 1250, "y": 250}, "data": {"label": "发送审批结果", "config": {"channel": "Email", "recipients": "申请人"}}},
+                {"id": "n8", "type": "end", "position": {"x": 1450, "y": 250}, "data": {"label": "流程结束", "config": {}}},
+            ],
+            "edges": [
+                {"id": "e1", "source": "n1", "target": "n2"},
+                {"id": "e2", "source": "n2", "target": "n3"},
+                {"id": "e3", "source": "n3", "target": "n4"},
+                {"id": "e4", "source": "n4", "target": "n5"},
+                {"id": "e5", "source": "n5", "target": "n6"},
+                {"id": "e6", "source": "n6", "target": "n7"},
+                {"id": "e7", "source": "n7", "target": "n8"},
+            ]
         }
     ]
     

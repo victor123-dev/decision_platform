@@ -16,9 +16,9 @@ const scopeBadgeMap = {
 };
 
 const scopeLabels = {
-  global: 'Global',
-  flow: 'Flow',
-  session: 'Session',
+  global: '全局',
+  flow: '流程级',
+  session: '会话级',
 };
 
 export default function GlobalVariables(qoderProps) {
@@ -38,7 +38,7 @@ export default function GlobalVariables(qoderProps) {
     description: '',
   });
 
-  const tabs = ['全部', 'Global', 'Flow', 'Session'];
+  const tabs = ['全部', '全局', '流程级', '会话级'];
 
   const loadVariables = async () => {
     try {
@@ -55,7 +55,8 @@ export default function GlobalVariables(qoderProps) {
 
   const filtered = variables.filter((v) => {
     if (activeTab === '全部') return true;
-    return v.scope === activeTab.toLowerCase();
+    const scopeKey = Object.keys(scopeLabels).find((k) => scopeLabels[k] === activeTab);
+    return v.scope === (scopeKey || activeTab.toLowerCase());
   });
 
   const startEdit = (varId, field) => {
@@ -198,9 +199,9 @@ export default function GlobalVariables(qoderProps) {
                 onChange={(e) => setNewVar({ ...newVar, scope: e.target.value })}
                 style={{ width: '100%' }}
                data-qoder-id="qel-select-701fcbb4" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-select-701fcbb4&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;select&quot;,&quot;loc&quot;:{&quot;line&quot;:162,&quot;column&quot;:15}}">
-                <option value="global" data-qoder-id="qel-option-1f311dd9" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-option-1f311dd9&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;option&quot;,&quot;loc&quot;:{&quot;line&quot;:168,&quot;column&quot;:17}}">Global</option>
-                <option value="flow" data-qoder-id="qel-option-20311f6c" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-option-20311f6c&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;option&quot;,&quot;loc&quot;:{&quot;line&quot;:169,&quot;column&quot;:17}}">Flow</option>
-                <option value="session" data-qoder-id="qel-option-213120ff" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-option-213120ff&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;option&quot;,&quot;loc&quot;:{&quot;line&quot;:170,&quot;column&quot;:17}}">Session</option>
+                <option value="global" data-qoder-id="qel-option-1f311dd9" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-option-1f311dd9&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;option&quot;,&quot;loc&quot;:{&quot;line&quot;:168,&quot;column&quot;:17}}">全局</option>
+                <option value="flow" data-qoder-id="qel-option-20311f6c" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-option-20311f6c&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;option&quot;,&quot;loc&quot;:{&quot;line&quot;:169,&quot;column&quot;:17}}">流程级</option>
+                <option value="session" data-qoder-id="qel-option-213120ff" data-qoder-source="{&quot;qoderId&quot;:&quot;qel-option-213120ff&quot;,&quot;filePath&quot;:&quot;react-vite/src/pages/GlobalVariables.jsx&quot;,&quot;componentName&quot;:&quot;GlobalVariables&quot;,&quot;elementRole&quot;:&quot;option&quot;,&quot;loc&quot;:{&quot;line&quot;:170,&quot;column&quot;:17}}">会话级</option>
               </select>
             </div>
           </div>

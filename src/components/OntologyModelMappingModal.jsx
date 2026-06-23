@@ -29,6 +29,7 @@ const blankVariable = () => ({
   symbol: '', name: '', nameEn: '', nature: 'association', dimension: '1D', domain: 'continuous',
   indices: [], ontologyRefs: [], directRef: null, indexMapping: [],
   lowerBound: 0, upperBound: null, businessMeaning: '', unit: '', valueType: 'number',
+  indicesConfig: [],
 });
 const blankConstraint = () => ({
   id: `ct-${Math.random().toString(36).slice(2, 10)}`,
@@ -597,6 +598,52 @@ export default function OntologyModelMappingModal({ onClose, highlightVariableId
                           <input value={newItemForm.businessMeaning} onChange={e => updateFormItem('businessMeaning', e.target.value)}
                             className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400" placeholder="描述该变量的业务含义" />
                         </div>
+                        {/* 索引配置区域：当维度为1D/2D/3D时显示 */}
+                        {newItemForm.dimension !== '0D' && (() => {
+                          const dimCount = newItemForm.dimension === '1D' ? 1 : newItemForm.dimension === '2D' ? 2 : 3;
+                          const defaultAliases = ['i', 'j', 'k'];
+                          // 确保 indicesConfig 数组长度匹配维度
+                          const currentConfig = newItemForm.indicesConfig || [];
+                          while (currentConfig.length < dimCount) {
+                            currentConfig.push({ alias: defaultAliases[currentConfig.length], businessMeaning: '', objectTypeId: '' });
+                          }
+                          return (
+                            <div className="col-span-2 border border-blue-200 rounded-lg p-3 bg-blue-50/40">
+                              <label className="block text-xs font-medium text-blue-600 mb-2">索引配置（{newItemForm.dimension}）</label>
+                              <div className="space-y-2">
+                                {currentConfig.slice(0, dimCount).map((cfg, cfgIdx) => (
+                                  <div key={cfgIdx} className="flex items-center gap-2">
+                                    <span className="w-6 text-xs font-mono font-semibold text-purple-700 bg-purple-50 px-1.5 py-1 rounded text-center">{cfg.alias}</span>
+                                    <input
+                                      value={cfg.businessMeaning}
+                                      onChange={e => {
+                                        const updated = [...currentConfig];
+                                        updated[cfgIdx] = { ...updated[cfgIdx], businessMeaning: e.target.value };
+                                        updateFormItem('indicesConfig', updated);
+                                      }}
+                                      className="flex-1 px-2 py-1 text-sm border border-slate-200 rounded focus:outline-none focus:border-blue-400"
+                                      placeholder="业务涵义，如 工单编号"
+                                    />
+                                    <select
+                                      value={cfg.objectTypeId || ''}
+                                      onChange={e => {
+                                        const updated = [...currentConfig];
+                                        updated[cfgIdx] = { ...updated[cfgIdx], objectTypeId: e.target.value };
+                                        updateFormItem('indicesConfig', updated);
+                                      }}
+                                      className="flex-1 px-2 py-1 text-sm border border-slate-200 rounded focus:outline-none focus:border-blue-400"
+                                    >
+                                      <option value=''>关联本体对象...</option>
+                                      {ONTOLOGY_OBJECT_TYPES.map(obj => (
+                                        <option key={obj.id} value={obj.id}>{obj.displayName}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-3">
@@ -746,6 +793,8 @@ export default function OntologyModelMappingModal({ onClose, highlightVariableId
                                     : (v.indices || []).map(idx => ({
                                         alias: typeof idx === 'string' ? idx : idx.alias,
                                         objectTypeId: typeof idx === 'string' ? null : idx.objectTypeId,
+                                        businessMeaning: typeof idx === 'string' ? '' : (idx.businessMeaning || ''),
+                                        propertyId: typeof idx === 'string' ? '' : (idx.propertyId || ''),
                                         role: typeof idx === 'string' ? '' : (idx.objectTypeDisplayName || ''),
                                       }));
                                   if (mappings.length === 0) return null;
@@ -754,15 +803,19 @@ export default function OntologyModelMappingModal({ onClose, highlightVariableId
                                       <span className="text-slate-400 block mb-1">索引映射:</span>
                                       <table className="w-full border-collapse text-[11px]">
                                         <thead><tr className="bg-purple-50">
-                                          <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">别名</th>
-                                          <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">本体对象</th>
+                                          <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">索引</th>
+                                          <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">业务涵义</th>
+                                          <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">关联对象</th>
+                                          <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">主键属性</th>
                                           <th className="text-left px-2 py-1 text-purple-600 font-semibold border border-purple-100">角色</th>
                                         </tr></thead>
                                         <tbody>
                                           {mappings.map((im, imi) => (
                                             <tr key={imi}>
                                               <td className="px-2 py-1 font-mono text-purple-700 border border-slate-100">{im.alias}</td>
+                                              <td className="px-2 py-1 text-slate-600 border border-slate-100">{im.businessMeaning || '—'}</td>
                                               <td className="px-2 py-1 text-slate-600 border border-slate-100">{ONTOLOGY_OBJECT_TYPES.find(o => o.id === im.objectTypeId)?.displayName || im.objectTypeId || '—'}</td>
+                                              <td className="px-2 py-1 text-slate-600 font-mono border border-slate-100">{im.propertyId || '—'}</td>
                                               <td className="px-2 py-1 text-slate-500 border border-slate-100">{im.role || '—'}</td>
                                             </tr>
                                           ))}

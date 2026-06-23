@@ -18,9 +18,9 @@ from enum import Enum
 # ── Enums ─────────────────────────────────────────────────────────────────
 
 class ProblemType(str, Enum):
-    LP = "LP"
-    MIP = "MIP"
-    QP = "QP"
+    LP = "LP"          # 线性规划 (GLOP/SCIP)
+    MIP = "MIP"        # 混合整数规划 (SCIP/CBC)
+    CP_SAT = "CP_SAT"  # 约束满足 (CP-SAT Solver)
 
 
 class VariableDomain(str, Enum):
@@ -43,6 +43,66 @@ class ConstraintOperator(str, Enum):
 class BindingType(str, Enum):
     object_property = "object_property"
     relation_property = "relation_property"
+
+
+class GlobalConstraintType(str, Enum):
+    ALL_DIFFERENT = "AllDifferent"       # 所有变量取不同值
+    NO_OVERLAP = "NoOverlap"            # 区间不重叠
+    CUMULATIVE = "Cumulative"           # 累积资源约束
+    ELEMENT = "Element"                 # 索引取值约束
+    TABLE = "Table"                     # 表格约束（允许值组合）
+    CIRCUIT = "Circuit"                 # 哈密顿回路
+    INVERSE = "Inverse"                 # 逆映射
+    AUTOMATON = "Automaton"             # 有限自动机
+
+
+# ── CP-SAT Variable Definitions ──────────────────────────────────────────
+
+class IntVarDefinition(BaseModel):
+    id: str = Field(description="变量唯一标识")
+    name: str = Field(description="变量名称")
+    lowerBound: int = Field(0, description="下界")
+    upperBound: int = Field(100, description="上界")
+    description: Optional[str] = ""
+
+
+class BoolVarDefinition(BaseModel):
+    id: str = Field(description="变量唯一标识")
+    name: str = Field(description="变量名称")
+    description: Optional[str] = ""
+
+
+class IntervalVarDefinition(BaseModel):
+    id: str = Field(description="变量唯一标识")
+    name: str = Field(description="变量名称")
+    startVar: str = Field(description="开始变量ID (引用IntVar)")
+    sizeMin: int = Field(description="最小持续时间")
+    sizeMax: int = Field(description="最大持续时间")
+    endVar: str = Field(description="结束变量ID (引用IntVar)")
+    description: Optional[str] = ""
+
+
+# ── Global Constraint ────────────────────────────────────────────────────
+
+class GlobalConstraint(BaseModel):
+    id: str = Field(description="约束唯一标识")
+    type: GlobalConstraintType = Field(description="全局约束类型")
+    variables: List[str] = Field(default_factory=list, description="关联变量ID列表")
+    intervals: List[str] = Field(default_factory=list, description="关联区间变量ID列表")
+    params: Dict[str, Any] = Field(default_factory=dict, description="约束参数 (如 capacity, demands 等)")
+    name: Optional[str] = ""
+    description: Optional[str] = ""
+
+
+# ── CP-SAT Solver Config ─────────────────────────────────────────────────
+
+class CPSATSolverConfig(BaseModel):
+    timeLimitSeconds: int = 60
+    numWorkers: int = 4
+    searchStrategy: str = Field("automatic", description="automatic/fixed/choose_first")
+    solutionLimit: int = Field(0, description="0=找最优, >0=找到N个解即停")
+    enumerateAllSolutions: bool = False
+    logSearchProgress: bool = False
 
 
 # ── Ontology Reference ────────────────────────────────────────────────────
@@ -171,6 +231,12 @@ class OptimizationDslModel(BaseModel):
     variables: List[DecisionVariableTemplate] = Field(default_factory=list)
     objective: Optional[ObjectiveDefinition] = None
     constraints: List[ConstraintTemplate] = Field(default_factory=list)
+    # CP-SAT 专用字段
+    intVars: List[IntVarDefinition] = Field(default_factory=list)
+    intervalVars: List[IntervalVarDefinition] = Field(default_factory=list)
+    boolVars: List[BoolVarDefinition] = Field(default_factory=list)
+    globalConstraints: List[GlobalConstraint] = Field(default_factory=list)
+    cpsatConfig: Optional[CPSATSolverConfig] = None
     solverConfig: SolverConfig = Field(default_factory=SolverConfig)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     status: str = "draft"
@@ -240,6 +306,21 @@ class SolveResult(BaseModel):
     status: str = Field(description="optimal|infeasible|unbounded|error")
     objectiveValue: Optional[float] = None
     solution: Dict[str, float] = Field(default_factory=dict)
+    intSolution: Dict[str, int] = Field(default_factory=dict, description="CP-SAT 整数解")
+    allSolutions: List[Dict[str, int]] = Field(default_factory=list, description="枚举的所有解")
     solveTime: float = 0.0
     businessResults: List[Dict[str, Any]] = Field(default_factory=list)
     metrics: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ── CP-SAT Model IR (Compiler Output) ────────────────────────────────────
+
+class CPSATModelIR(BaseModel):
+    modelId: str
+    intVars: List[Dict[str, Any]] = Field(default_factory=list, description="[{id, name, lb, ub}]")
+    boolVars: List[Dict[str, Any]] = Field(default_factory=list, description="[{id, name}]")
+    intervalVars: List[Dict[str, Any]] = Field(default_factory=list, description="[{id, start_var, size_min, size_max, end_var}]")
+    linearConstraints: List[Dict[str, Any]] = Field(default_factory=list, description="[{coeffs:{var_id: coeff}, op, rhs}]")
+    globalConstraints: List[Dict[str, Any]] = Field(default_factory=list, description="[{type, vars, intervals, params}]")
+    objective: Optional[Dict[str, Any]] = Field(None, description="{sense: minimize/maximize, coefficients: {var_id: coeff}}")
+    config: Dict[str, Any] = Field(default_factory=dict, description="{num_workers, time_limit, ...}")

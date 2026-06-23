@@ -59,10 +59,33 @@ def model_to_or_dsl(model_def: dict, ontologies: Optional[list] = None) -> dict:
                 dsl_var["ontologyRef"] = onto_match["ref"]
                 dsl_var["businessMeaning"] = onto_match["meaning"]
 
-        # 尝试推断索引（如果变量名包含下标模式如 X11M1）
-        indices = _infer_variable_indices(v.get("name", ""), sets)
-        if indices:
-            dsl_var["indices"] = indices
+        # 优先透传已有的维度与索引信息
+        if v.get("dimension"):
+            dsl_var["dimension"] = v["dimension"]
+        if v.get("indices"):
+            dsl_var["indices"] = [
+                {
+                    "symbol": idx.get("alias", ""),
+                    "businessMeaning": idx.get("businessMeaning", ""),
+                    "ontologyBinding": {
+                        "object": idx.get("objectTypeDisplayName", ""),
+                        "property": (v.get("indexMapping", [{}])[i] if i < len(v.get("indexMapping", [])) else {}).get("propertyId", "")
+                    } if idx.get("objectTypeId") else None
+                }
+                for i, idx in enumerate(v["indices"])
+            ]
+            # 清理 None 的 ontologyBinding
+            for idx_entry in dsl_var["indices"]:
+                if idx_entry.get("ontologyBinding") is None:
+                    del idx_entry["ontologyBinding"]
+        if v.get("businessMeaning"):
+            dsl_var["businessMeaning"] = v["businessMeaning"]
+
+        # 尝试推断索引（如果变量名包含下标模式如 X11M1，且未透传索引）
+        if not dsl_var.get("indices"):
+            indices = _infer_variable_indices(v.get("name", ""), sets)
+            if indices:
+                dsl_var["indices"] = indices
 
         dsl_variables.append(dsl_var)
 
